@@ -122,6 +122,24 @@
   }
 
   .gpsDot{width:16px;height:16px;border-radius:50%;background:#3aa0ff;border:3px solid white;box-shadow:0 0 0 2px rgba(58,160,255,.4);}
+
+  #recordBtn.recording{background:#ff3b3b; color:#fff; border-color:#ff3b3b; animation:recPulse 1.4s infinite;}
+  @keyframes recPulse{0%{box-shadow:0 0 0 0 rgba(255,59,59,.6);}70%{box-shadow:0 0 0 10px rgba(255,59,59,0);}100%{box-shadow:0 0 0 0 rgba(255,59,59,0);}}
+
+  #recordStatsBar{
+    display:none; align-items:center; justify-content:center; gap:10px;
+    background:rgba(255,59,59,.15); border:1px solid #ff3b3b; border-radius:10px;
+    padding:6px 10px; color:#ffd6d6; font-size:12px; font-weight:600;
+  }
+
+  .trackRow{display:flex; align-items:center; gap:8px; padding:6px; border-radius:8px; font-size:12px; color:var(--text);}
+  .trackRow input{accent-color:#ff33cc; flex-shrink:0;}
+  .trackRow .trackInfo{flex:1; overflow:hidden;}
+  .trackRow .trackName{font-size:12px; color:var(--text);}
+  .trackRow .trackMeta{font-size:10px; color:#8a988a;}
+  .trackRow .trackDel{color:#ff5c5c; font-size:16px; padding:2px 6px; flex-shrink:0;}
+  #trackList{max-height:160px; overflow-y:auto;}
+  #trackListEmpty{font-size:11px; color:#8a988a; padding:4px 6px;}
 </style>
 </head>
 <body>
@@ -155,6 +173,10 @@
     ⬇️ Свали този район офлайн
   </button>
   <div id="offlineStatus" style="font-size:11px; color:#8a988a; padding:4px 6px;">Няма запазени райони</div>
+  <hr class="sep">
+  <h4>МОИТЕ ТРАСЕТА</h4>
+  <div id="trackList"></div>
+  <div id="trackListEmpty">Все още няма записани трасета</div>
 </div>
 
 <div id="legend">
@@ -163,17 +185,24 @@
   <div class="legendRow"><span class="legendSwatch" style="background:#ffb020"></span>Пътека / ограничен достъп</div>
   <div class="legendRow"><span class="legendSwatch" style="background:#ff4d4d"></span>Частен / забранен</div>
   <div class="legendRow"><span class="legendSwatch" style="background:#7a7a7a"></span>Асфалт / общ път</div>
+  <div class="legendRow"><span class="legendSwatch" style="background:#ff33cc"></span>Моето трасе (записано)</div>
 </div>
 
 <div id="toast"></div>
 
 <div id="rightControls">
+  <button class="iconBtn" id="recordBtn" title="Записвай трасе">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>
+  </button>
   <button class="iconBtn" id="myLocationBtn" title="Моето местоположение">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
   </button>
 </div>
 
 <div id="bottombar">
+  <div id="recordStatsBar">
+    <span id="recordStatsText">🔴 REC</span>
+  </div>
   <div id="coordsBar">
     <span id="coordsText">GPS: изчаква...</span>
     <span id="zoomText">Z: -</span>
@@ -324,6 +353,12 @@
     document.getElementById('coordsText').textContent =
       'GPS: ' + fmtCoord(latlng[0]) + ', ' + fmtCoord(latlng[1]) + ' (±' + Math.round(pos.coords.accuracy) + 'м)';
     if(followMode){ map.setView(latlng, Math.max(map.getZoom(), 15)); }
+    if(recording){
+      if(recordPoints.length === 0 || haversine(recordPoints[recordPoints.length - 1], latlng) > 5){
+        recordPoints.push(latlng);
+        if(recordLine) recordLine.setLatLngs(recordPoints);
+      }
+    }
   }
 
   function onGpsError(err){
@@ -538,6 +573,159 @@
     });
   }
   downloadAreaBtn.addEventListener('click', downloadArea);
+
+  // ---------- Track recording ----------
+  function haversine(a, b){
+    var R = 6371000;
+    var dLat = (b[0] - a[0]) * Math.PI / 180;
+    var dLon = (b[1] - a[1]) * Math.PI / 180;
+    var lat1 = a[0] * Math.PI / 180, lat2 = b[0] * Math.PI / 180;
+    var h = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  }
+  function trackDistance(points){
+    var d = 0;
+    for(var i = 1; i < points.length; i++){ d += haversine(points[i - 1], points[i]); }
+    return d;
+  }
+  function pad2(n){ return (n < 10 ? '0' : '') + n; }
+  function fmtDuration(ms){
+    var s = Math.floor(ms / 1000);
+    var hh = Math.floor(s / 3600); s %= 3600;
+    var mm = Math.floor(s / 60), ss = s % 60;
+    return (hh > 0 ? hh + ':' : '') + pad2(mm) + ':' + pad2(ss);
+  }
+
+  function loadSavedTracks(){
+    try { return JSON.parse(localStorage.getItem('offroad_tracks') || '[]'); }
+    catch(e){ return []; }
+  }
+  function persistTracks(){
+    try { localStorage.setItem('offroad_tracks', JSON.stringify(savedTracks)); }
+    catch(e){ toast('Паметта е пълна — старо трасе не се запази.', 3000); }
+  }
+
+  var savedTracks = loadSavedTracks();
+  var savedTracksGroup = L.layerGroup().addTo(map);
+  var savedTrackLayers = {};
+
+  var trackListEl = document.getElementById('trackList');
+  var trackListEmptyEl = document.getElementById('trackListEmpty');
+
+  function renderTrackList(){
+    trackListEl.innerHTML = '';
+    trackListEmptyEl.style.display = savedTracks.length ? 'none' : 'block';
+    savedTracks.slice().reverse().forEach(function(track){
+      var row = document.createElement('div');
+      row.className = 'trackRow';
+
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = true;
+      cb.addEventListener('change', function(){
+        var layer = savedTrackLayers[track.id];
+        if(!layer) return;
+        if(cb.checked){ savedTracksGroup.addLayer(layer); } else { savedTracksGroup.removeLayer(layer); }
+      });
+
+      var info = document.createElement('div');
+      info.className = 'trackInfo';
+      var name = document.createElement('div');
+      name.className = 'trackName';
+      name.textContent = track.name;
+      var meta = document.createElement('div');
+      meta.className = 'trackMeta';
+      meta.textContent = (track.distance / 1000).toFixed(1) + ' км';
+      info.appendChild(name);
+      info.appendChild(meta);
+      info.addEventListener('click', function(){
+        var layer = savedTrackLayers[track.id];
+        if(layer){ map.fitBounds(layer.getBounds(), {padding:[40,40]}); }
+      });
+
+      var del = document.createElement('span');
+      del.className = 'trackDel';
+      del.textContent = '✕';
+      del.addEventListener('click', function(e){
+        e.stopPropagation();
+        savedTracks = savedTracks.filter(function(t){ return t.id !== track.id; });
+        persistTracks();
+        if(savedTrackLayers[track.id]){
+          savedTracksGroup.removeLayer(savedTrackLayers[track.id]);
+          delete savedTrackLayers[track.id];
+        }
+        renderTrackList();
+      });
+
+      row.appendChild(cb);
+      row.appendChild(info);
+      row.appendChild(del);
+      trackListEl.appendChild(row);
+    });
+  }
+
+  function addTrackToMap(track){
+    var line = L.polyline(track.points, {color:'#ff33cc', weight:4, opacity:0.85});
+    line.bindPopup('<b>' + track.name + '</b><br>' + (track.distance / 1000).toFixed(1) + ' км');
+    savedTrackLayers[track.id] = line;
+    savedTracksGroup.addLayer(line);
+  }
+
+  savedTracks.forEach(addTrackToMap);
+  renderTrackList();
+
+  var recording = false, recordPoints = [], recordLine = null, recordStartTime = null, recordTimer = null;
+  var recordBtn = document.getElementById('recordBtn');
+  var recordStatsBar = document.getElementById('recordStatsBar');
+  var recordStatsText = document.getElementById('recordStatsText');
+
+  function updateRecordingStats(){
+    var dist = trackDistance(recordPoints);
+    var elapsed = Date.now() - recordStartTime;
+    recordStatsText.textContent = '🔴 ' + (dist / 1000).toFixed(2) + ' км · ' + fmtDuration(elapsed);
+  }
+
+  function startRecording(){
+    recording = true;
+    recordPoints = lastLatLng ? [lastLatLng] : [];
+    recordLine = L.polyline(recordPoints, {color:'#ff33cc', weight:5, opacity:0.95}).addTo(map);
+    recordStartTime = Date.now();
+    recordBtn.classList.add('recording');
+    recordStatsBar.style.display = 'flex';
+    updateRecordingStats();
+    recordTimer = setInterval(updateRecordingStats, 1000);
+    toast('Записът на трасето започна', 1500);
+  }
+
+  function stopRecording(){
+    recording = false;
+    clearInterval(recordTimer);
+    recordBtn.classList.remove('recording');
+    recordStatsBar.style.display = 'none';
+
+    if(recordLine){ map.removeLayer(recordLine); recordLine = null; }
+
+    if(recordPoints.length < 2){
+      toast('Записът е твърде кратък — не е запазен.', 2500);
+      return;
+    }
+    var dist = trackDistance(recordPoints);
+    var track = {
+      id: 't' + Date.now(),
+      name: new Date().toLocaleString('bg-BG', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'}),
+      points: recordPoints,
+      distance: dist
+    };
+    savedTracks.push(track);
+    persistTracks();
+    addTrackToMap(track);
+    renderTrackList();
+    toast('Трасето е запазено: ' + (dist / 1000).toFixed(1) + ' км', 3000);
+  }
+
+  recordBtn.addEventListener('click', function(){
+    if(recording){ stopRecording(); } else { startRecording(); }
+  });
 
   // ---------- Search (Nominatim, free) ----------
   var searchInput = document.getElementById('searchInput');
