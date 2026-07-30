@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>OffRoad Maps</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="OffRoad">
+<meta name="theme-color" content="#1b2a1f">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<style>
+  :root{
+    --accent:#7cd957;
+    --danger:#ff5c5c;
+    --warn:#ffb020;
+    --panel:#1b1f1b;
+    --panel2:#232823;
+    --text:#eef4ee;
+  }
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0c0e0c;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    -webkit-tap-highlight-color:transparent; user-select:none;}
+  #map{position:absolute;inset:0;background:#111;}
+
+  /* Top bar */
+  #topbar{
+    position:absolute; top:0; left:0; right:0; z-index:1000;
+    display:flex; align-items:center; gap:8px;
+    padding:calc(env(safe-area-inset-top,0px) + 8px) 10px 8px 10px;
+    background:linear-gradient(to bottom, rgba(10,12,10,.85), rgba(10,12,10,0));
+    pointer-events:none;
+  }
+  #topbar > *{pointer-events:auto;}
+  #searchBox{
+    flex:1; display:flex; align-items:center; background:var(--panel);
+    border:1px solid #3a4a3a; border-radius:12px; padding:8px 10px; gap:8px;
+    box-shadow:0 2px 10px rgba(0,0,0,.4);
+  }
+  #searchInput{
+    flex:1; background:transparent; border:none; outline:none; color:var(--text);
+    font-size:15px;
+  }
+  #searchBox svg{flex-shrink:0;}
+  #searchResults{
+    position:absolute; top:56px; left:10px; right:10px; z-index:1001;
+    background:var(--panel); border-radius:12px; overflow:hidden;
+    box-shadow:0 4px 16px rgba(0,0,0,.5); display:none; max-height:40vh; overflow-y:auto;
+  }
+  .searchResult{padding:10px 12px; font-size:14px; color:var(--text); border-bottom:1px solid #2c332c;}
+  .searchResult:active{background:#2c332c;}
+
+  .iconBtn{
+    width:42px; height:42px; border-radius:12px; background:var(--panel);
+    border:1px solid #3a4a3a; display:flex; align-items:center; justify-content:center;
+    box-shadow:0 2px 10px rgba(0,0,0,.4); color:var(--text);
+  }
+  .iconBtn.active{background:var(--accent); color:#0c0e0c; border-color:var(--accent);}
+
+  /* Right side floating controls */
+  #rightControls{
+    position:absolute; right:10px; top:50%; transform:translateY(-50%); z-index:1000;
+    display:flex; flex-direction:column; gap:10px;
+  }
+
+  /* Bottom bar */
+  #bottombar{
+    position:absolute; left:0; right:0; bottom:0; z-index:1000;
+    padding:10px 10px calc(env(safe-area-inset-bottom,0px) + 10px) 10px;
+    background:linear-gradient(to top, rgba(10,12,10,.9), rgba(10,12,10,0));
+    display:flex; flex-direction:column; gap:8px;
+  }
+  #coordsBar{
+    display:flex; justify-content:space-between; align-items:center;
+    color:#b7c9b7; font-size:11px; padding:0 4px; font-variant-numeric:tabular-nums;
+  }
+  #actionRow{ display:flex; gap:8px; }
+  .bigBtn{
+    flex:1; display:flex; align-items:center; justify-content:center; gap:6px;
+    background:var(--panel); border:1px solid #3a4a3a; border-radius:14px;
+    padding:12px 8px; color:var(--text); font-size:13px; font-weight:600;
+    box-shadow:0 2px 10px rgba(0,0,0,.4);
+  }
+  .bigBtn.loading{opacity:.6;}
+  .bigBtn.on{background:var(--accent); color:#0c0e0c; border-color:var(--accent);}
+
+  /* Legend */
+  #legend{
+    position:absolute; z-index:1000; background:var(--panel); border:1px solid #3a4a3a;
+    border-radius:12px; padding:10px 12px; font-size:12px; color:var(--text);
+    box-shadow:0 2px 10px rgba(0,0,0,.4); display:none; min-width:180px;
+  }
+  #legend h4{margin:0 0 6px 0; font-size:12px; color:#a9c2a9; font-weight:600;}
+  .legendRow{display:flex; align-items:center; gap:8px; margin:4px 0;}
+  .legendSwatch{width:18px; height:4px; border-radius:2px; flex-shrink:0;}
+
+  /* Layer panel */
+  #layerPanel{
+    position:absolute; z-index:1002; background:var(--panel); border:1px solid #3a4a3a;
+    border-radius:14px; padding:12px; box-shadow:0 4px 20px rgba(0,0,0,.5);
+    right:10px; top:70px; width:210px; display:none;
+  }
+  #layerPanel h4{margin:2px 0 8px 2px; font-size:12px; color:#a9c2a9; font-weight:600;}
+  .layerOpt{display:flex; align-items:center; gap:8px; padding:8px 6px; border-radius:8px; font-size:13px; color:var(--text);}
+  .layerOpt.active{background:#2c332c;}
+  .layerOpt input{accent-color:var(--accent);}
+  hr.sep{border:none; border-top:1px solid #333a33; margin:8px 0;}
+
+  .leaflet-control-attribution{background:rgba(10,12,10,.6)!important; color:#8a988a!important; font-size:9px!important;}
+  .leaflet-control-attribution a{color:#a9c2a9!important;}
+  .leaflet-control-zoom{display:none;}
+
+  #toast{
+    position:absolute; left:50%; top:70px; transform:translateX(-50%); z-index:1003;
+    background:var(--panel); color:var(--text); padding:10px 16px; border-radius:10px;
+    font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.5); display:none; max-width:80%; text-align:center;
+  }
+
+  .gpsDot{width:16px;height:16px;border-radius:50%;background:#3aa0ff;border:3px solid white;box-shadow:0 0 0 2px rgba(58,160,255,.4);}
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="topbar">
+  <div id="searchBox">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8a988a" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input id="searchInput" placeholder="Търси място / град..." />
+  </div>
+  <button class="iconBtn" id="layerToggleBtn" title="Слоеве">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+  </button>
+</div>
+
+<div id="searchResults"></div>
+
+<div id="layerPanel">
+  <h4>ПОДЛОЖКА</h4>
+  <label class="layerOpt" data-base="sat"><input type="radio" name="base" checked> 🛰️ Сателит</label>
+  <label class="layerOpt" data-base="topo"><input type="radio" name="base"> ⛰️ Топо / Пътеки</label>
+  <label class="layerOpt" data-base="street"><input type="radio" name="base"> 🗺️ Улици</label>
+  <hr class="sep">
+  <h4>СЛОЕВЕ</h4>
+  <label class="layerOpt" data-overlay="roads"><input type="checkbox" checked> Пътна мрежа (етикети)</label>
+  <label class="layerOpt" data-overlay="trails"><input type="checkbox"> Черни пътища / трасета (OSM)</label>
+</div>
+
+<div id="legend">
+  <h4>ЛЕГЕНДА</h4>
+  <div class="legendRow"><span class="legendSwatch" style="background:#3ddc3d"></span>Черен път / проходим</div>
+  <div class="legendRow"><span class="legendSwatch" style="background:#ffb020"></span>Пътека / ограничен достъп</div>
+  <div class="legendRow"><span class="legendSwatch" style="background:#ff4d4d"></span>Частен / забранен</div>
+  <div class="legendRow"><span class="legendSwatch" style="background:#7a7a7a"></span>Асфалт / общ път</div>
+</div>
+
+<div id="toast"></div>
+
+<div id="rightControls">
+  <button class="iconBtn" id="myLocationBtn" title="Моето местоположение">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
+  </button>
+</div>
+
+<div id="bottombar">
+  <div id="coordsBar">
+    <span id="coordsText">GPS: изчаква...</span>
+    <span id="zoomText">Z: -</span>
+  </div>
+  <div id="actionRow">
+    <button class="bigBtn" id="followBtn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 L12 22 M2 12 L22 12"/></svg>
+      Следвай ме
+    </button>
+    <button class="bigBtn" id="loadTrailsBtn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19 L10 6 L14 14 L17 9 L20 19"/></svg>
+      Зареди трасета
+    </button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  // ---------- Map init ----------
+  var map = L.map('map', {
+    zoomControl:false,
+    attributionControl:true,
+    minZoom:4,
+    maxZoom:19,
+    worldCopyJump:true
+  }).setView([42.7, 25.3], 7); // Bulgaria default, GPS will recenter
+
+  // ---------- Base layers (no API key needed) ----------
+  var satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom:19, attribution:'Esri World Imagery'
+  });
+  var topoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+    maxZoom:17, subdomains:'abc', attribution:'OpenTopoMap (CC-BY-SA), OSM'
+  });
+  var streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom:19, subdomains:'abc', attribution:'OpenStreetMap contributors'
+  });
+
+  // Transparent road/label overlay over satellite (Esri, free, no key)
+  var roadsOverlay = L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom:19, attribution:'Esri Transportation'
+  });
+
+  satLayer.addTo(map);
+  roadsOverlay.addTo(map);
+
+  var currentBase = 'sat';
+  function setBase(name){
+    [satLayer, topoLayer, streetLayer].forEach(function(l){ if(map.hasLayer(l)) map.removeLayer(l); });
+    if(name==='sat') satLayer.addTo(map);
+    if(name==='topo') topoLayer.addTo(map);
+    if(name==='street') streetLayer.addTo(map);
+    // keep roads overlay above base, re-add to fix z-order
+    if(map.hasLayer(roadsOverlay)){ map.removeLayer(roadsOverlay); roadsOverlay.addTo(map); }
+    if(map.hasLayer(trailsLayerGroup)){ map.removeLayer(trailsLayerGroup); trailsLayerGroup.addTo(map); }
+    currentBase = name;
+  }
+
+  // ---------- Layer panel UI ----------
+  var layerPanel = document.getElementById('layerPanel');
+  var layerToggleBtn = document.getElementById('layerToggleBtn');
+  layerToggleBtn.addEventListener('click', function(){
+    layerPanel.style.display = layerPanel.style.display==='block' ? 'none' : 'block';
+  });
+  document.querySelectorAll('[data-base]').forEach(function(el){
+    el.addEventListener('click', function(){
+      document.querySelectorAll('[data-base]').forEach(function(o){o.classList.remove('active'); o.querySelector('input').checked=false;});
+      el.classList.add('active');
+      el.querySelector('input').checked = true;
+      setBase(el.getAttribute('data-base'));
+    });
+  });
+  document.querySelector('[data-base="sat"]').classList.add('active');
+
+  document.querySelector('[data-overlay="roads"]').addEventListener('click', function(e){
+    var cb = this.querySelector('input');
+    setTimeout(function(){
+      if(cb.checked){ roadsOverlay.addTo(map); } else { map.removeLayer(roadsOverlay); }
+    },0);
+  });
+  document.querySelector('[data-overlay="trails"]').addEventListener('click', function(){
+    var cb = this.querySelector('input');
+    setTimeout(function(){
+      if(cb.checked){
+        trailsLayerGroup.addTo(map);
+        document.getElementById('legend').style.display = 'block';
+        loadTrails();
+      } else {
+        map.removeLayer(trailsLayerGroup);
+        document.getElementById('legend').style.display = 'none';
+      }
+    },0);
+  });
+
+  // close panel when tapping map
+  map.on('click', function(){ layerPanel.style.display='none'; document.getElementById('searchResults').style.display='none'; });
+
+  // position legend under layer panel area, bottom-left instead to avoid overlap on small screens
+  document.getElementById('legend').style.left = '10px';
+  document.getElementById('legend').style.bottom = '112px';
+
+  // ---------- Toast ----------
+  var toastTimer;
+  function toast(msg, ms){
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ t.style.display='none'; }, ms||2500);
+  }
+
+  // ---------- GPS ----------
+  var gpsMarker = null, gpsAccuracyCircle = null, followMode = false, watchId = null, lastLatLng = null;
+
+  function ensureGpsMarker(latlng, accuracy){
+    if(!gpsMarker){
+      var icon = L.divIcon({className:'', html:'<div class="gpsDot"></div>', iconSize:[16,16]});
+      gpsMarker = L.marker(latlng, {icon:icon, zIndexOffset:1000}).addTo(map);
+      gpsAccuracyCircle = L.circle(latlng, {radius:accuracy||20, color:'#3aa0ff', weight:1, fillColor:'#3aa0ff', fillOpacity:0.15}).addTo(map);
+    } else {
+      gpsMarker.setLatLng(latlng);
+      gpsAccuracyCircle.setLatLng(latlng);
+      gpsAccuracyCircle.setRadius(accuracy||20);
+    }
+  }
+
+  function fmtCoord(v){ return v.toFixed(5); }
+
+  function onGpsUpdate(pos){
+    var latlng = [pos.coords.latitude, pos.coords.longitude];
+    lastLatLng = latlng;
+    ensureGpsMarker(latlng, pos.coords.accuracy);
+    document.getElementById('coordsText').textContent =
+      'GPS: ' + fmtCoord(latlng[0]) + ', ' + fmtCoord(latlng[1]) + ' (±' + Math.round(pos.coords.accuracy) + 'м)';
+    if(followMode){ map.setView(latlng, Math.max(map.getZoom(), 15)); }
+  }
+
+  function onGpsError(err){
+    toast('GPS грешка: ' + err.message, 3000);
+    document.getElementById('coordsText').textContent = 'GPS: недостъпен';
+  }
+
+  function startGps(){
+    if(!navigator.geolocation){ toast('Геолокацията не се поддържа на това устройство.'); return; }
+    watchId = navigator.geolocation.watchPosition(onGpsUpdate, onGpsError, {
+      enableHighAccuracy:true, maximumAge:2000, timeout:15000
+    });
+  }
+  startGps();
+
+  document.getElementById('myLocationBtn').addEventListener('click', function(){
+    if(lastLatLng){ map.setView(lastLatLng, Math.max(map.getZoom(),15)); }
+    else { toast('Търсене на GPS сигнал...'); }
+  });
+
+  var followBtn = document.getElementById('followBtn');
+  followBtn.addEventListener('click', function(){
+    followMode = !followMode;
+    followBtn.classList.toggle('on', followMode);
+    if(followMode && lastLatLng){ map.setView(lastLatLng, Math.max(map.getZoom(),15)); }
+    toast(followMode ? 'Следене включено' : 'Следене изключено', 1500);
+  });
+
+  map.on('zoomend', function(){
+    document.getElementById('zoomText').textContent = 'Z: ' + map.getZoom();
+  });
+  document.getElementById('zoomText').textContent = 'Z: ' + map.getZoom();
+
+  // ---------- Trails / access overlay via Overpass API ----------
+  var trailsLayerGroup = L.layerGroup();
+
+  function classify(tags){
+    tags = tags || {};
+    var access = (tags.access||'').toLowerCase();
+    var hwy = (tags.highway||'').toLowerCase();
+    var vehicle = (tags['motor_vehicle']||tags['motorcycle']||tags['atv']||'').toLowerCase();
+
+    if(access==='private' || access==='no' || vehicle==='private' || vehicle==='no'){
+      return {color:'#ff4d4d', weight:4, label:'Частен / забранен'};
+    }
+    if(hwy==='track'){
+      return {color:'#3ddc3d', weight:4, label:'Черен път'};
+    }
+    if(hwy==='path' || hwy==='bridleway' || hwy==='footway'){
+      return {color:'#ffb020', weight:3, label:'Пътека (ограничен достъп за МПС)'};
+    }
+    if(hwy==='unclassified' || hwy==='service'){
+      return {color:'#9fd6ff', weight:3, label:'Второстепенен път'};
+    }
+    return {color:'#7a7a7a', weight:2, label:'Път'};
+  }
+
+  var loadTrailsBtn = document.getElementById('loadTrailsBtn');
+
+  function loadTrails(){
+    var zoom = map.getZoom();
+    if(zoom < 12){
+      toast('Приближи картата (zoom 13+) за да заредиш трасета в тази област.', 3000);
+      return;
+    }
+    var b = map.getBounds();
+    var bbox = b.getSouth() + ',' + b.getWest() + ',' + b.getNorth() + ',' + b.getEast();
+    var query = '[out:json][timeout:25];(' +
+      'way["highway"~"^(track|path|bridleway|unclassified|service)$"](' + bbox + ');' +
+      ');out body geom;';
+
+    loadTrailsBtn.classList.add('loading');
+    loadTrailsBtn.textContent = '...';
+    toast('Зареждане на трасета от OpenStreetMap...', 2000);
+
+    fetch('https://overpass-api.de/api/interpreter', {
+      method:'POST',
+      body:'data=' + encodeURIComponent(query)
+    }).then(function(r){
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }).then(function(data){
+      trailsLayerGroup.clearLayers();
+      var count = 0;
+      (data.elements||[]).forEach(function(el){
+        if(el.type!=='way' || !el.geometry) return;
+        var latlngs = el.geometry.map(function(g){ return [g.lat, g.lon]; });
+        var style = classify(el.tags);
+        var line = L.polyline(latlngs, {color:style.color, weight:style.weight, opacity:0.9});
+        var tags = el.tags||{};
+        var popupHtml = '<b>' + style.label + '</b><br>' +
+          (tags.name ? ('Име: ' + tags.name + '<br>') : '') +
+          (tags.surface ? ('Настилка: ' + tags.surface + '<br>') : '') +
+          (tags.tracktype ? ('Тип: ' + tags.tracktype + '<br>') : '') +
+          (tags.access ? ('Достъп: ' + tags.access + '<br>') : '') +
+          (tags.smoothness ? ('Проходимост: ' + tags.smoothness) : '');
+        line.bindPopup(popupHtml || style.label);
+        line.addTo(trailsLayerGroup);
+        count++;
+      });
+      loadTrailsBtn.classList.remove('loading');
+      loadTrailsBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19 L10 6 L14 14 L17 9 L20 19"/></svg> Зареди трасета';
+      toast(count + ' трасета заредени', 2500);
+      document.getElementById('legend').style.display = 'block';
+      var trailsCheckbox = document.querySelector('[data-overlay="trails"] input');
+      trailsCheckbox.checked = true;
+      if(!map.hasLayer(trailsLayerGroup)) trailsLayerGroup.addTo(map);
+    }).catch(function(err){
+      loadTrailsBtn.classList.remove('loading');
+      loadTrailsBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19 L10 6 L14 14 L17 9 L20 19"/></svg> Зареди трасета';
+      toast('Грешка при зареждане: ' + err.message, 3500);
+    });
+  }
+  loadTrailsBtn.addEventListener('click', loadTrails);
+
+  // ---------- Search (Nominatim, free) ----------
+  var searchInput = document.getElementById('searchInput');
+  var searchResults = document.getElementById('searchResults');
+  var searchDebounce;
+
+  searchInput.addEventListener('input', function(){
+    clearTimeout(searchDebounce);
+    var q = searchInput.value.trim();
+    if(q.length < 3){ searchResults.style.display='none'; return; }
+    searchDebounce = setTimeout(function(){
+      fetch('https://nominatim.openstreetmap.org/search?format=json&limit=6&accept-language=bg&q=' + encodeURIComponent(q))
+        .then(function(r){ return r.json(); })
+        .then(function(list){
+          searchResults.innerHTML = '';
+          if(!list.length){ searchResults.style.display='none'; return; }
+          list.forEach(function(item){
+            var div = document.createElement('div');
+            div.className = 'searchResult';
+            div.textContent = item.display_name;
+            div.addEventListener('click', function(){
+              map.setView([parseFloat(item.lat), parseFloat(item.lon)], 14);
+              searchResults.style.display='none';
+              searchInput.value = item.display_name.split(',')[0];
+            });
+            searchResults.appendChild(div);
+          });
+          searchResults.style.display = 'block';
+        }).catch(function(){ searchResults.style.display='none'; });
+    }, 400);
+  });
+
+})();
+</script>
+</body>
+</html>
