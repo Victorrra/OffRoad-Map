@@ -171,6 +171,16 @@
   }
   .miniBtn.active{background:var(--accent); color:#0c0e0c; border-color:var(--accent); font-weight:600;}
   .photoThumb{width:100%; border-radius:8px; margin-bottom:6px; max-height:120px; object-fit:cover;}
+
+  #navBtn.picking{background:#b388ff; color:#1b0f2e; border-color:#b388ff; animation:recPulse 1.4s infinite;}
+  #navBar{
+    display:none; align-items:center; justify-content:center; gap:8px;
+    background:rgba(179,136,255,.18); border:1px solid #b388ff; border-radius:10px;
+    padding:6px 10px; color:#ecdcff; font-size:12px; font-weight:600;
+  }
+  #navArrow{display:inline-block; font-size:16px; transition:transform .3s;}
+  #navCloseBtn{margin-left:4px; font-size:14px; padding:0 4px;}
+  .destIcon{font-size:24px; line-height:1; filter:drop-shadow(0 1px 2px rgba(0,0,0,.7));}
 </style>
 </head>
 <body>
@@ -233,11 +243,15 @@
   <div class="legendRow"><span class="legendSwatch" style="background:#ff33cc"></span>Моето трасе (записано)</div>
   <div class="legendRow"><span class="legendSwatch" style="background:#00e5ff"></span>Път назад (връщане)</div>
   <div class="legendRow"><span class="legendSwatch" style="background:#3aa0ff"></span>Планиран маршрут</div>
+  <div class="legendRow"><span class="legendSwatch" style="background:#b388ff"></span>Навигация до цел</div>
 </div>
 
 <div id="toast"></div>
 
 <div id="rightControls">
+  <button class="iconBtn" id="navBtn" title="Навигирай до точка">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>
+  </button>
   <button class="iconBtn" id="addWaypointBtn" title="Добави маркер тук">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
   </button>
@@ -253,6 +267,11 @@
 </div>
 
 <div id="bottombar">
+  <div id="navBar">
+    <span id="navArrow">↑</span>
+    <span id="navText">До целта: -- км</span>
+    <span id="navCloseBtn">✕</span>
+  </div>
   <div id="routeBar">
     <span id="routeStatusText">🧭 На маршрута</span>
     <span id="routeCloseBtn">✕</span>
@@ -404,8 +423,12 @@
     },0);
   });
 
-  // close panel when tapping map
-  map.on('click', function(){ layerPanel.style.display='none'; document.getElementById('searchResults').style.display='none'; });
+  // close panel when tapping map (or, in nav-picking mode, use the tap as the destination)
+  map.on('click', function(e){
+    if(navPicking){ handleDestinationPick(e.latlng); return; }
+    layerPanel.style.display='none';
+    document.getElementById('searchResults').style.display='none';
+  });
 
   // position legend under layer panel area, bottom-left instead to avoid overlap on small screens
   document.getElementById('legend').style.left = '10px';
@@ -463,6 +486,7 @@
     }
     if(returnActive){ updateReturnStats(); }
     if(routeFollowing){ updateRouteFollowing(latlng); }
+    if(navActive){ updateNavStats(); }
   }
 
   function onGpsError(err){
@@ -1296,14 +1320,19 @@
     return min;
   }
 
-  function setPlannedRoute(track){
+  function setPlannedRoute(track, opts){
+    opts = opts || {};
     plannedRoute = track;
-    if(plannedRouteLine) map.removeLayer(plannedRouteLine);
-    plannedRouteLine = L.polyline(track.points, {color:'#3aa0ff', weight:5, opacity:0.85, dashArray:'2,10'}).addTo(map);
+    if(plannedRouteLine){ map.removeLayer(plannedRouteLine); plannedRouteLine = null; }
+    if(!opts.skipLine){
+      plannedRouteLine = L.polyline(track.points, {color:'#3aa0ff', weight:5, opacity:0.85, dashArray:'2,10'}).addTo(map);
+    }
     routeStatusEl.textContent = 'Активен: ' + track.name + ' (' + (track.distance / 1000).toFixed(1) + ' км)';
-    map.fitBounds(plannedRouteLine.getBounds(), {padding:[50,50]});
     renderTrackList();
-    toast('Маршрутът е зареден. Натисни 🧭 бутона вдясно, за да го следваш активно.', 3500);
+    if(!opts.silent){
+      map.fitBounds(L.latLngBounds(track.points), {padding:[50,50]});
+      toast('Маршрутът е зареден. Натисни 🧭 бутона вдясно, за да го следваш активно.', 3500);
+    }
   }
 
   function clearPlannedRoute(){
@@ -1355,6 +1384,189 @@
   document.getElementById('followRouteBtn').addEventListener('click', function(){
     if(routeFollowing){ stopRouteFollowing(); } else { startRouteFollowing(); }
   });
+
+  // ---------- Tap-to-navigate: route over the OSM trail/road network ----------
+  var NAV_MAX_STRAIGHT_KM = 20;   // don't try to route further than this
+  var NAV_SNAP_MAX_M = 700;       // how far a point may be from a known way to "snap" onto it
+
+  var navPicking = false, navActive = false, navLine = null, navDestMarker = null, navDest = null;
+  var navBtn = document.getElementById('navBtn');
+  var navBar = document.getElementById('navBar');
+  var navText = document.getElementById('navText');
+  var navArrow = document.getElementById('navArrow');
+
+  function updateNavStats(){
+    if(!navActive || !lastLatLng || !navDest) return;
+    var dist = haversine(lastLatLng, navDest);
+    navText.textContent = 'До целта: ' + (dist < 1000 ? Math.round(dist) + ' м' : (dist / 1000).toFixed(1) + ' км');
+    navArrow.style.transform = 'rotate(' + bearing(lastLatLng, navDest) + 'deg)';
+  }
+
+  function clearNav(){
+    navActive = false;
+    navPicking = false;
+    navBtn.classList.remove('picking');
+    navBar.style.display = 'none';
+    if(navLine){ map.removeLayer(navLine); navLine = null; }
+    if(navDestMarker){ map.removeLayer(navDestMarker); navDestMarker = null; }
+    navDest = null;
+    if(plannedRoute && plannedRoute.id && String(plannedRoute.id).indexOf('nav_') === 0){ clearPlannedRoute(); }
+  }
+  document.getElementById('navCloseBtn').addEventListener('click', clearNav);
+
+  navBtn.addEventListener('click', function(){
+    if(navActive){ clearNav(); return; }
+    navPicking = !navPicking;
+    navBtn.classList.toggle('picking', navPicking);
+    if(navPicking){ toast('Докосни картата там, където искаш да отидеш', 3000); }
+  });
+
+  // -- Build a small routing graph from Overpass way geometries --
+  function nodeKey(latlng){ return latlng[0].toFixed(6) + ',' + latlng[1].toFixed(6); }
+
+  function buildRouteGraph(elements){
+    var nodes = {}, adj = {};
+    function ensureNode(latlng){
+      var k = nodeKey(latlng);
+      if(!nodes[k]) nodes[k] = latlng;
+      if(!adj[k]) adj[k] = [];
+      return k;
+    }
+    (elements || []).forEach(function(el){
+      if(el.type !== 'way' || !el.geometry || el.geometry.length < 2) return;
+      var tags = el.tags || {};
+      var access = (tags.access || '').toLowerCase();
+      var vehicle = (tags.motor_vehicle || tags.motorcycle || tags.atv || '').toLowerCase();
+      if(access === 'private' || access === 'no' || vehicle === 'private' || vehicle === 'no') return; // avoid, same rule as the trail overlay
+
+      var pts = el.geometry.map(function(g){ return [g.lat, g.lon]; });
+      for(var i = 1; i < pts.length; i++){
+        var kA = ensureNode(pts[i - 1]);
+        var kB = ensureNode(pts[i]);
+        var d = haversine(pts[i - 1], pts[i]);
+        adj[kA].push({to: kB, dist: d});
+        adj[kB].push({to: kA, dist: d});
+      }
+    });
+    return {nodes: nodes, adj: adj};
+  }
+
+  function nearestGraphNode(graph, latlng){
+    var bestKey = null, bestDist = Infinity;
+    for(var k in graph.nodes){
+      var d = haversine(latlng, graph.nodes[k]);
+      if(d < bestDist){ bestDist = d; bestKey = k; }
+    }
+    return bestKey ? {key: bestKey, dist: bestDist} : null;
+  }
+
+  // Simple O(V^2) Dijkstra — graphs from one Overpass bbox query are small enough for this to be fast.
+  function dijkstra(graph, startKey, endKey){
+    var dist = {}, prev = {}, visited = {};
+    for(var k in graph.nodes){ dist[k] = Infinity; }
+    dist[startKey] = 0;
+
+    while(true){
+      var u = null, best = Infinity;
+      for(var k2 in dist){
+        if(!visited[k2] && dist[k2] < best){ best = dist[k2]; u = k2; }
+      }
+      if(u === null) break;
+      if(u === endKey) break;
+      visited[u] = true;
+
+      (graph.adj[u] || []).forEach(function(edge){
+        if(visited[edge.to]) return;
+        var alt = dist[u] + edge.dist;
+        if(alt < dist[edge.to]){ dist[edge.to] = alt; prev[edge.to] = u; }
+      });
+    }
+
+    if(dist[endKey] == null || dist[endKey] === Infinity) return null;
+    var path = [endKey];
+    var cur = endKey;
+    while(cur !== startKey){
+      cur = prev[cur];
+      if(cur == null) return null;
+      path.push(cur);
+    }
+    path.reverse();
+    return path.map(function(k){ return graph.nodes[k]; });
+  }
+
+  function handleDestinationPick(latlngObj){
+    var dest = [latlngObj.lat, latlngObj.lng];
+    navPicking = false;
+    navBtn.classList.remove('picking');
+
+    if(!lastLatLng){ toast('Изчакай GPS сигнал, преди да навигираш.', 2500); return; }
+
+    var straight = haversine(lastLatLng, dest);
+    if(straight > NAV_MAX_STRAIGHT_KM * 1000){
+      toast('Целта е твърде далеч (>' + NAV_MAX_STRAIGHT_KM + ' км) за навигация по трасета.', 3500);
+      return;
+    }
+
+    navDest = dest;
+    if(navDestMarker) map.removeLayer(navDestMarker);
+    navDestMarker = L.marker(dest, {icon: L.divIcon({className:'', html:'<div class="destIcon">🏁</div>', iconSize:[28,28], iconAnchor:[14,26]})}).addTo(map);
+
+    toast('Изчисляване на маршрут по картографираните пътища...', 3000);
+    navBtn.classList.add('picking');
+
+    var b = L.latLngBounds([lastLatLng, dest]).pad(0.25);
+    var bbox = b.getSouth() + ',' + b.getWest() + ',' + b.getNorth() + ',' + b.getEast();
+    var query = '[out:json][timeout:25];(' +
+      'way["highway"~"^(track|path|bridleway|unclassified|service|residential|tertiary|secondary|primary)$"]' +
+      '["access"!~"private|no"](' + bbox + ');' +
+      ');out body geom;';
+
+    fetch('https://overpass-api.de/api/interpreter', {method:'POST', body:'data=' + encodeURIComponent(query)})
+      .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(data){
+        navBtn.classList.remove('picking');
+        var graph = buildRouteGraph(data.elements);
+        var startSnap = nearestGraphNode(graph, lastLatLng);
+        var endSnap = nearestGraphNode(graph, dest);
+
+        var routePoints = null;
+        if(startSnap && endSnap && startSnap.dist <= NAV_SNAP_MAX_M && endSnap.dist <= NAV_SNAP_MAX_M){
+          routePoints = dijkstra(graph, startSnap.key, endSnap.key);
+        }
+
+        if(!routePoints){
+          toast('Не намерих свързан път в картата — показвам права линия до целта.', 3500);
+          routePoints = [lastLatLng, dest];
+        } else {
+          toast('Маршрутът е готов.', 2000);
+        }
+
+        activateNavRoute(routePoints);
+      })
+      .catch(function(err){
+        navBtn.classList.remove('picking');
+        toast('Грешка при търсене на маршрут (' + err.message + ') — права линия до целта.', 3500);
+        activateNavRoute([lastLatLng, dest]);
+      });
+  }
+
+  function activateNavRoute(points){
+    if(navLine) map.removeLayer(navLine);
+    navLine = L.polyline(points, {color:'#b388ff', weight:5, opacity:0.9, dashArray:'1,10'}).addTo(map);
+    navActive = true;
+    navBar.style.display = 'flex';
+    updateNavStats();
+    map.fitBounds(navLine.getBounds(), {padding:[60,60]});
+
+    // Also register it as the (invisible) planned route, so the off-route alarm can be
+    // switched on for it too without drawing a second, duplicate line on the map.
+    setPlannedRoute({
+      id: 'nav_' + Date.now(),
+      name: 'Навигация до цел',
+      points: points,
+      distance: trackDistance(points)
+    }, {silent: true, skipLine: true});
+  }
 
   // ---------- Search (Nominatim, free) ----------
   var searchInput = document.getElementById('searchInput');
