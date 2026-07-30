@@ -122,6 +122,7 @@
   }
 
   .gpsDot{width:16px;height:16px;border-radius:50%;background:#3aa0ff;border:3px solid white;box-shadow:0 0 0 2px rgba(58,160,255,.4);}
+  .gpsHeadingGroup{opacity:0; transition:opacity .3s;}
 
   #recordBtn.recording{background:#ff3b3b; color:#fff; border-color:#ff3b3b; animation:recPulse 1.4s infinite;}
   @keyframes recPulse{0%{box-shadow:0 0 0 0 rgba(255,59,59,.6);}70%{box-shadow:0 0 0 10px rgba(255,59,59,0);}100%{box-shadow:0 0 0 0 rgba(255,59,59,0);}}
@@ -445,11 +446,15 @@
   }
 
   // ---------- GPS ----------
-  var gpsMarker = null, gpsAccuracyCircle = null, followMode = false, watchId = null, lastLatLng = null;
+  var gpsMarker = null, gpsAccuracyCircle = null, followMode = false, watchId = null, lastLatLng = null, lastSpeedKmh = null;
 
   function ensureGpsMarker(latlng, accuracy){
     if(!gpsMarker){
-      var icon = L.divIcon({className:'', html:'<div class="gpsDot"></div>', iconSize:[16,16]});
+      var html = '<svg width="40" height="40" viewBox="0 0 40 40">' +
+        '<g class="gpsHeadingGroup"><path d="M20,4 L27,22 L20,17 L13,22 Z" fill="#3aa0ff"/></g>' +
+        '<circle cx="20" cy="20" r="8" fill="#3aa0ff" stroke="white" stroke-width="3"/>' +
+        '</svg>';
+      var icon = L.divIcon({className:'', html:html, iconSize:[40,40], iconAnchor:[20,20]});
       gpsMarker = L.marker(latlng, {icon:icon, zIndexOffset:1000}).addTo(map);
       gpsAccuracyCircle = L.circle(latlng, {radius:accuracy||20, color:'#3aa0ff', weight:1, fillColor:'#3aa0ff', fillOpacity:0.15}).addTo(map);
     } else {
@@ -458,6 +463,44 @@
       gpsAccuracyCircle.setRadius(accuracy||20);
     }
   }
+
+  // ---------- Heading: phone compass (with GPS movement heading as fallback) ----------
+  var headingSource = 'none';
+
+  function applyHeading(deg){
+    if(!gpsMarker) return;
+    var el = gpsMarker.getElement();
+    if(!el) return;
+    var g = el.querySelector('.gpsHeadingGroup');
+    if(!g) return;
+    g.style.opacity = '1';
+    g.setAttribute('transform', 'rotate(' + deg + ' 20 20)');
+  }
+
+  function onDeviceOrientation(e){
+    var heading = null;
+    if(e.webkitCompassHeading != null){ heading = e.webkitCompassHeading; } // iOS Safari
+    else if(e.absolute && e.alpha != null){ heading = (360 - e.alpha) % 360; } // Android Chrome (best-effort)
+    if(heading != null && !isNaN(heading)){
+      headingSource = 'compass';
+      applyHeading(heading);
+    }
+  }
+
+  function requestCompassPermission(){
+    if(typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
+      DeviceOrientationEvent.requestPermission().then(function(state){
+        if(state === 'granted'){ window.addEventListener('deviceorientation', onDeviceOrientation); }
+      }).catch(function(){});
+    } else if('ondeviceorientationabsolute' in window){
+      window.addEventListener('deviceorientationabsolute', onDeviceOrientation);
+    } else if('DeviceOrientationEvent' in window){
+      window.addEventListener('deviceorientation', onDeviceOrientation);
+    }
+  }
+  document.addEventListener('touchstart', function firstTouchCompass(){
+    requestCompassPermission();
+  }, {once:true});
 
   function fmtCoord(v){ return v.toFixed(5); }
 
@@ -474,8 +517,14 @@
 
     var speedKmh = (pos.coords.speed != null && !isNaN(pos.coords.speed)) ? Math.round(pos.coords.speed * 3.6) : null;
     speedEl.textContent = speedKmh != null ? speedKmh : '--';
+    lastSpeedKmh = speedKmh;
     var alt = pos.coords.altitude != null ? Math.round(pos.coords.altitude) : null;
     altEl.textContent = alt != null ? alt : '--';
+
+    // Fall back to GPS movement heading if the phone's compass isn't available/granted.
+    if(headingSource !== 'compass' && pos.coords.heading != null && !isNaN(pos.coords.heading)){
+      applyHeading(pos.coords.heading);
+    }
 
     if(recording){
       if(recordPoints.length === 0 || haversine(recordPoints[recordPoints.length - 1], latlng) > 5){
@@ -515,6 +564,16 @@
     toast(followMode ? 'Следене включено' : 'Следене изключено', 1500);
   });
 
+  // If the user manually drags the map (e.g. to browse trails elsewhere), stop
+  // auto-following their GPS position so it doesn't keep snapping back.
+  map.on('dragstart', function(){
+    if(followMode){
+      followMode = false;
+      followBtn.classList.remove('on');
+      toast('Следенето е спряно (местиш картата ръчно)', 2000);
+    }
+  });
+
   map.on('zoomend', function(){
     document.getElementById('zoomText').textContent = 'Z: ' + map.getZoom();
   });
@@ -544,9 +603,44 @@
     return {color:'#7a7a7a', weight:2, label:'Път'};
   }
 
+  // ---------- Shared Overpass helper: tries several public mirrors, retries on 429/504 ----------
+  var OVERPASS_ENDPOINTS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.openstreetmap.fr/api/interpreter'
+  ];
+
+  function overpassFetch(query){
+    function tryEndpoint(i){
+      if(i >= OVERPASS_ENDPOINTS.length){
+        return Promise.reject(new Error('Overpass сървърите са претоварени. Опитай след малко.'));
+      }
+      return fetch(OVERPASS_ENDPOINTS[i], {method:'POST', body:'data=' + encodeURIComponent(query)})
+        .then(function(r){
+          if(r.status === 429 || r.status === 504){
+            var e = new Error('busy'); e.retry = true; e.status = r.status;
+            throw e;
+          }
+          if(!r.ok){ throw new Error('HTTP ' + r.status); }
+          return r.json();
+        })
+        .catch(function(err){
+          if(err && err.retry && i < OVERPASS_ENDPOINTS.length - 1){
+            return tryEndpoint(i + 1);
+          }
+          if(err && err.retry){
+            throw new Error('сървърите са претоварени (HTTP ' + err.status + '). Опитай след малко.');
+          }
+          throw err;
+        });
+    }
+    return tryEndpoint(0);
+  }
+
   var loadTrailsBtn = document.getElementById('loadTrailsBtn');
 
   function loadTrails(){
+    if(loadTrailsBtn.classList.contains('loading')) return; // already in flight
     var zoom = map.getZoom();
     if(zoom < 12){
       toast('Приближи картата (zoom 13+) за да заредиш трасета в тази област.', 3000);
@@ -562,13 +656,7 @@
     loadTrailsBtn.textContent = '...';
     toast('Зареждане на трасета от OpenStreetMap...', 2000);
 
-    fetch('https://overpass-api.de/api/interpreter', {
-      method:'POST',
-      body:'data=' + encodeURIComponent(query)
-    }).then(function(r){
-      if(!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    }).then(function(data){
+    overpassFetch(query).then(function(data){
       trailsLayerGroup.clearLayers();
       var count = 0;
       (data.elements||[]).forEach(function(el){
@@ -722,6 +810,18 @@
     var hh = Math.floor(s / 3600); s %= 3600;
     var mm = Math.floor(s / 60), ss = s % 60;
     return (hh > 0 ? hh + ':' : '') + pad2(mm) + ':' + pad2(ss);
+  }
+
+  // Rough ETA: uses current GPS speed if we're actually moving at a sane pace,
+  // otherwise falls back to a typical off-road ATV pace so it's never blank.
+  var ETA_FALLBACK_SPEED_KMH = 15;
+  function estimateEta(distanceM){
+    var speed = (lastSpeedKmh != null && lastSpeedKmh > 2) ? lastSpeedKmh : ETA_FALLBACK_SPEED_KMH;
+    var mins = Math.round((distanceM / 1000) / speed * 60);
+    if(mins < 1) return '<1 мин';
+    if(mins < 60) return '~' + mins + ' мин';
+    var h = Math.floor(mins / 60), m = mins % 60;
+    return '~' + h + 'ч' + (m > 0 ? ' ' + m + 'м' : '');
   }
 
   // meta: parallel array of {alt, speed, ts} (any field may be null/undefined)
@@ -1130,7 +1230,7 @@
   function updateReturnStats(){
     if(!returnActive || !lastLatLng || !returnStart) return;
     var dist = haversine(lastLatLng, returnStart);
-    returnText.textContent = 'До старта: ' + (dist < 1000 ? Math.round(dist) + ' м' : (dist / 1000).toFixed(1) + ' км');
+    returnText.textContent = 'До старта: ' + (dist < 1000 ? Math.round(dist) + ' м' : (dist / 1000).toFixed(1) + ' км') + ' · ' + estimateEta(dist);
     returnArrow.style.transform = 'rotate(' + bearing(lastLatLng, returnStart) + 'deg)';
   }
 
@@ -1398,7 +1498,7 @@
   function updateNavStats(){
     if(!navActive || !lastLatLng || !navDest) return;
     var dist = haversine(lastLatLng, navDest);
-    navText.textContent = 'До целта: ' + (dist < 1000 ? Math.round(dist) + ' м' : (dist / 1000).toFixed(1) + ' км');
+    navText.textContent = 'До целта: ' + (dist < 1000 ? Math.round(dist) + ' м' : (dist / 1000).toFixed(1) + ' км') + ' · ' + estimateEta(dist);
     navArrow.style.transform = 'rotate(' + bearing(lastLatLng, navDest) + 'deg)';
   }
 
@@ -1521,8 +1621,7 @@
       '["access"!~"private|no"](' + bbox + ');' +
       ');out body geom;';
 
-    fetch('https://overpass-api.de/api/interpreter', {method:'POST', body:'data=' + encodeURIComponent(query)})
-      .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    overpassFetch(query)
       .then(function(data){
         navBtn.classList.remove('picking');
         var graph = buildRouteGraph(data.elements);
