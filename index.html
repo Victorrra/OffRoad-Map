@@ -149,6 +149,12 @@
   <h4>СЛОЕВЕ</h4>
   <label class="layerOpt" data-overlay="roads"><input type="checkbox" checked> Пътна мрежа (етикети)</label>
   <label class="layerOpt" data-overlay="trails"><input type="checkbox"> Черни пътища / трасета (OSM)</label>
+  <hr class="sep">
+  <h4>ОФЛАЙН</h4>
+  <button id="downloadAreaBtn" class="layerOpt" style="width:100%; border:1px solid #3a4a3a; cursor:pointer; background:none; font:inherit; text-align:left;">
+    ⬇️ Свали този район офлайн
+  </button>
+  <div id="offlineStatus" style="font-size:11px; color:#8a988a; padding:4px 6px;">Няма запазени райони</div>
 </div>
 
 <div id="legend">
@@ -189,6 +195,16 @@
 (function(){
   "use strict";
 
+  // ---------- Offline: register service worker ----------
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', function(){
+      navigator.serviceWorker.register('service-worker.js').catch(function(){});
+    });
+  }
+  if(navigator.storage && navigator.storage.persist){
+    navigator.storage.persist().catch(function(){});
+  }
+
   // ---------- Map init ----------
   var map = L.map('map', {
     zoomControl:false,
@@ -202,11 +218,13 @@
   var satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     maxZoom:19, attribution:'Esri World Imagery'
   });
-  var topoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
-    maxZoom:17, subdomains:'abc', attribution:'OpenTopoMap (CC-BY-SA), OSM'
+  // Note: fixed single subdomain (not {s}/abc round-robin) so tile URLs are
+  // deterministic — required for the offline cache to match requests later.
+  var topoLayer = L.tileLayer('https://a.tile.opentopomap.org/{z}/{x}/{y}.png', {
+    maxZoom:17, attribution:'OpenTopoMap (CC-BY-SA), OSM'
   });
-  var streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom:19, subdomains:'abc', attribution:'OpenStreetMap contributors'
+  var streetLayer = L.tileLayer('https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom:19, attribution:'OpenStreetMap contributors'
   });
 
   // Transparent road/label overlay over satellite (Esri, free, no key)
@@ -420,6 +438,106 @@
     });
   }
   loadTrailsBtn.addEventListener('click', loadTrails);
+
+  // ---------- Offline area download ----------
+  function lon2tile(lon, z){ return Math.floor((lon + 180) / 360 * Math.pow(2, z)); }
+  function lat2tile(lat, z){
+    var rad = lat * Math.PI / 180;
+    return Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * Math.pow(2, z));
+  }
+
+  function tileUrl(template, z, x, y){
+    return template.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+  }
+
+  function activeTileTemplates(){
+    var templates = [];
+    if(currentBase === 'sat'){
+      templates.push({ url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maxZoom:19 });
+      if(document.querySelector('[data-overlay="roads"] input').checked){
+        templates.push({ url:'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', maxZoom:19 });
+      }
+    } else if(currentBase === 'topo'){
+      templates.push({ url:'https://a.tile.opentopomap.org/{z}/{x}/{y}.png', maxZoom:17 });
+    } else {
+      templates.push({ url:'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', maxZoom:19 });
+    }
+    return templates;
+  }
+
+  var downloadAreaBtn = document.getElementById('downloadAreaBtn');
+  var offlineStatus = document.getElementById('offlineStatus');
+  var downloading = false;
+
+  function downloadArea(){
+    if(downloading) return;
+    if(!('caches' in window)){ toast('Офлайн кеширане не се поддържа на този браузър.', 3000); return; }
+    var z0 = map.getZoom();
+    if(z0 < 12){ toast('Приближи картата (zoom 13+) преди да свалиш района офлайн.', 3000); return; }
+
+    var b = map.getBounds();
+    var templates = activeTileTemplates();
+    var zoomLevels = [z0, z0 + 1, z0 + 2];
+
+    // Build the full tile list and de-duplicate against maxZoom per template
+    var jobs = [];
+    templates.forEach(function(t){
+      zoomLevels.forEach(function(z){
+        if(z > t.maxZoom) return;
+        var x1 = lon2tile(b.getWest(), z), x2 = lon2tile(b.getEast(), z);
+        var y1 = lat2tile(b.getNorth(), z), y2 = lat2tile(b.getSouth(), z);
+        for(var x = x1; x <= x2; x++){
+          for(var y = y1; y <= y2; y++){
+            jobs.push(tileUrl(t.url, z, x, y));
+          }
+        }
+      });
+    });
+
+    if(jobs.length === 0){ toast('Няма какво да се свали.', 2000); return; }
+    if(jobs.length > 2500){
+      toast('Района е твърде голям (' + jobs.length + ' плочки). Приближи повече и опитай пак.', 4000);
+      return;
+    }
+
+    downloading = true;
+    downloadAreaBtn.textContent = '⏳ Изтегляне... 0/' + jobs.length;
+
+    var done = 0, failed = 0, concurrency = 6, idx = 0, finished = false;
+
+    caches.open('offroad-tiles-v1').then(function(cache){
+      function finalize(){
+        if(finished) return;
+        finished = true;
+        downloading = false;
+        downloadAreaBtn.textContent = '⬇️ Свали този район офлайн';
+        offlineStatus.textContent = 'Запазено: ' + (jobs.length - failed) + ' плочки' + (failed ? (' (' + failed + ' неуспешни)') : '');
+        toast('Районът е свален офлайн (' + (jobs.length - failed) + ' плочки)', 3000);
+      }
+      function next(){
+        if(idx >= jobs.length){
+          if(done === jobs.length) finalize();
+          return;
+        }
+        var url = jobs[idx++];
+        fetch(url, { mode:'no-cors' }).then(function(res){
+          return cache.put(url, res);
+        }).catch(function(){ failed++; }).then(function(){
+          done++;
+          if(done % 5 === 0 || done === jobs.length){
+            downloadAreaBtn.textContent = '⏳ Изтегляне... ' + done + '/' + jobs.length;
+          }
+          if(done === jobs.length){
+            finalize();
+          } else {
+            next();
+          }
+        });
+      }
+      for(var i = 0; i < concurrency; i++){ next(); }
+    });
+  }
+  downloadAreaBtn.addEventListener('click', downloadArea);
 
   // ---------- Search (Nominatim, free) ----------
   var searchInput = document.getElementById('searchInput');
