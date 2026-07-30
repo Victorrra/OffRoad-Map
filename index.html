@@ -250,6 +250,14 @@
 <div id="toast"></div>
 
 <div id="rightControls">
+  <button class="iconBtn" id="compassResetBtn" title="Ориентирай на север">
+    <svg width="22" height="22" viewBox="0 0 24 24">
+      <g class="compassArrowGroup">
+        <polygon points="12 2 15 12 12 10 9 12" fill="#ff5c5c"/>
+        <polygon points="12 22 9 12 12 14 15 12" fill="#cfd8cf"/>
+      </g>
+    </svg>
+  </button>
   <button class="iconBtn" id="navBtn" title="Навигирай до точка">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>
   </button>
@@ -306,6 +314,7 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
 <script>
 (function(){
   "use strict";
@@ -343,7 +352,11 @@
     attributionControl:true,
     minZoom:4,
     maxZoom:19,
-    worldCopyJump:true
+    worldCopyJump:true,
+    rotate:true,        // let the user rotate the map with a two-finger touch gesture
+    touchRotate:true,
+    rotateControl:false, // we build our own reset-to-north button instead of the plugin's
+    bearing:0
   }).setView([42.7, 25.3], 7); // Bulgaria default, GPS will recenter
 
   // ---------- Base layers (no API key needed) ----------
@@ -435,6 +448,26 @@
   document.getElementById('legend').style.left = '10px';
   document.getElementById('legend').style.bottom = '112px';
 
+  // ---------- Map rotation (two-finger touch gesture via leaflet-rotate) ----------
+  var compassResetBtn = document.getElementById('compassResetBtn');
+  var compassArrowGroup = document.querySelector('#compassResetBtn .compassArrowGroup');
+
+  function currentBearing(){ return (typeof map.getBearing === 'function') ? map.getBearing() : 0; }
+
+  function syncCompassUI(){
+    var bearing = currentBearing();
+    if(compassArrowGroup) compassArrowGroup.setAttribute('transform', 'rotate(' + (-bearing) + ' 12 12)');
+    renderHeadingArrow(); // keep the GPS heading arrow correct relative to true north
+  }
+
+  compassResetBtn.addEventListener('click', function(){
+    if(typeof map.setBearing === 'function') map.setBearing(0);
+    syncCompassUI();
+  });
+
+  map.on('move', syncCompassUI);
+  map.on('rotate', syncCompassUI);
+
   // ---------- Toast ----------
   var toastTimer;
   function toast(msg, ms){
@@ -467,14 +500,23 @@
   // ---------- Heading: phone compass (with GPS movement heading as fallback) ----------
   var headingSource = 'none';
 
+  var lastHeadingDeg = null;
+
   function applyHeading(deg){
-    if(!gpsMarker) return;
+    lastHeadingDeg = deg;
+    renderHeadingArrow();
+  }
+
+  // Draws the GPS marker's arrow at its true compass heading, compensating for
+  // however much the user has manually rotated the map itself.
+  function renderHeadingArrow(){
+    if(lastHeadingDeg == null || !gpsMarker) return;
     var el = gpsMarker.getElement();
     if(!el) return;
     var g = el.querySelector('.gpsHeadingGroup');
     if(!g) return;
     g.style.opacity = '1';
-    g.setAttribute('transform', 'rotate(' + deg + ' 20 20)');
+    g.setAttribute('transform', 'rotate(' + (lastHeadingDeg - currentBearing()) + ' 20 20)');
   }
 
   function onDeviceOrientation(e){
