@@ -316,15 +316,80 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
 <script>
-(function(){
+// ---------- Storage: IndexedDB (no 5 MB localStorage limit for tracks & photos) ----------
+var OffroadDB = (function(){
+  var dbPromise = null;
+  function open(){
+    if(dbPromise) return dbPromise;
+    dbPromise = new Promise(function(resolve, reject){
+      if(!('indexedDB' in window)){ reject(new Error('no indexedDB')); return; }
+      var req = indexedDB.open('offroad', 1);
+      req.onupgradeneeded = function(){ req.result.createObjectStore('kv'); };
+      req.onsuccess = function(){ resolve(req.result); };
+      req.onerror = function(){ reject(req.error); };
+    });
+    return dbPromise;
+  }
+  function tx(mode, fn){
+    return open().then(function(db){
+      return new Promise(function(resolve, reject){
+        var t = db.transaction('kv', mode);
+        var result = fn(t.objectStore('kv'));
+        t.oncomplete = function(){ resolve(result && 'result' in result ? result.result : undefined); };
+        t.onerror = t.onabort = function(){ reject(t.error); };
+      });
+    });
+  }
+  return {
+    get: function(key){ return tx('readonly', function(st){ return st.get(key); }); },
+    set: function(key, value){ return tx('readwrite', function(st){ st.put(value, key); }); }
+  };
+})();
+
+// Read tracks/waypoints (migrating old localStorage data once), then start the app.
+(function bootOffroad(){
+  function fromLocal(key){
+    try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch(e){ return null; }
+  }
+  function migrate(idbKey, lsKey, current){
+    if(current !== undefined) return Promise.resolve(current);
+    var legacy = fromLocal(lsKey) || [];
+    return OffroadDB.set(idbKey, legacy).then(function(){
+      try { localStorage.removeItem(lsKey); } catch(e){}
+      return legacy;
+    });
+  }
+  Promise.all([OffroadDB.get('tracks'), OffroadDB.get('waypoints')])
+    .then(function(v){
+      return Promise.all([
+        migrate('tracks', 'offroad_tracks', v[0]),
+        migrate('waypoints', 'offroad_waypoints', v[1])
+      ]);
+    })
+    .then(function(v){ startOffroadApp({ idb:true, tracks:v[0], waypoints:v[1] }); })
+    .catch(function(){
+      // IndexedDB unavailable (e.g. some private modes) — fall back to localStorage
+      startOffroadApp({ idb:false, tracks:fromLocal('offroad_tracks') || [], waypoints:fromLocal('offroad_waypoints') || [] });
+    });
+})();
+
+function startOffroadApp(preload){
   "use strict";
 
   // ---------- Offline: register service worker ----------
   if('serviceWorker' in navigator){
-    window.addEventListener('load', function(){
-      navigator.serviceWorker.register('service-worker.js').catch(function(){});
+    navigator.serviceWorker.register('service-worker.js').catch(function(err){
+      console.warn('Service worker registration failed:', err);
     });
   }
+
+  // ---------- Connection status ----------
+  window.addEventListener('offline', function(){
+    toast('Няма връзка — картата работи само от свалените райони.', 3500);
+  });
+  window.addEventListener('online', function(){
+    toast('Връзката е възстановена.', 2000);
+  });
   if(navigator.storage && navigator.storage.persist){
     navigator.storage.persist().catch(function(){});
   }
@@ -765,6 +830,11 @@
   function downloadArea(){
     if(downloading) return;
     if(!('caches' in window)){ toast('Офлайн кеширане не се поддържа на този браузър.', 3000); return; }
+    if(currentBase === 'street'){
+      // tile.openstreetmap.org forbids bulk downloading (OSM Tile Usage Policy)
+      toast('OpenStreetMap не позволява сваляне на цели райони. Превключи на Сателит или Топо.', 4500);
+      return;
+    }
     var z0 = map.getZoom();
     if(z0 < 12){ toast('Приближи картата (zoom 13+) преди да свалиш района офлайн.', 3000); return; }
 
@@ -806,6 +876,13 @@
         downloadAreaBtn.textContent = '⬇️ Свали този район офлайн';
         offlineStatus.textContent = 'Запазено: ' + (jobs.length - failed) + ' плочки' + (failed ? (' (' + failed + ' неуспешни)') : '');
         toast('Районът е свален офлайн (' + (jobs.length - failed) + ' плочки)', 3000);
+        if(navigator.storage && navigator.storage.estimate){
+          navigator.storage.estimate().then(function(est){
+            var usedMb = Math.round((est.usage || 0) / 1048576);
+            var quotaMb = Math.round((est.quota || 0) / 1048576);
+            offlineStatus.textContent += ' · заета памет ' + usedMb + ' / ' + quotaMb + ' MB';
+          }).catch(function(){});
+        }
       }
       function next(){
         if(idx >= jobs.length){
@@ -813,8 +890,14 @@
           return;
         }
         var url = jobs[idx++];
-        fetch(url, { mode:'no-cors' }).then(function(res){
-          return cache.put(url, res);
+        cache.match(url).then(function(hit){
+          if(hit) return; // already downloaded earlier
+          // CORS (not no-cors): the response can be status-checked and isn't
+          // stored as an opaque response, which would eat the storage quota.
+          return fetch(url, { mode:'cors', credentials:'omit' }).then(function(res){
+            if(!res.ok) throw new Error('HTTP ' + res.status);
+            return cache.put(url, res);
+          });
         }).catch(function(){ failed++; }).then(function(){
           done++;
           if(done % 5 === 0 || done === jobs.length){
@@ -888,12 +971,17 @@
   }
 
   function loadSavedTracks(){
-    try { return JSON.parse(localStorage.getItem('offroad_tracks') || '[]'); }
-    catch(e){ return []; }
+    return Array.isArray(preload.tracks) ? preload.tracks : [];
   }
   function persistTracks(){
+    if(preload.idb){
+      OffroadDB.set('tracks', savedTracks).catch(function(){
+        toast('Паметта е пълна — трасето не се запази.', 3000);
+      });
+      return;
+    }
     try { localStorage.setItem('offroad_tracks', JSON.stringify(savedTracks)); }
-    catch(e){ toast('Паметта е пълна — старо трасе не се запази.', 3000); }
+    catch(e){ toast('Паметта е пълна — трасето не се запази.', 3000); }
   }
 
   var savedTracks = loadSavedTracks();
@@ -1068,10 +1156,15 @@
   };
 
   function loadWaypoints(){
-    try { return JSON.parse(localStorage.getItem('offroad_waypoints') || '[]'); }
-    catch(e){ return []; }
+    return Array.isArray(preload.waypoints) ? preload.waypoints : [];
   }
   function persistWaypoints(){
+    if(preload.idb){
+      OffroadDB.set('waypoints', savedWaypoints).catch(function(){
+        toast('Паметта е пълна — маркерът не се запази.', 3000);
+      });
+      return;
+    }
     try { localStorage.setItem('offroad_waypoints', JSON.stringify(savedWaypoints)); }
     catch(e){ toast('Паметта е пълна — маркерът не се запази.', 3000); }
   }
@@ -1740,7 +1833,7 @@
     }, 400);
   });
 
-})();
+}
 </script>
 </body>
 </html>
