@@ -1,0 +1,205 @@
+# OffRoad Maps — vector tile schema for Planetiler (generate-custom)
+# Builds an offline-first map of Bulgaria focused on what matters off-road:
+# tracks with their grade/surface/access, roads, water, forest, peaks, huts and springs.
+#
+# Local run:
+#   java -jar planetiler.jar generate-custom --schema=map/offroad-schema.yml \
+#        --output=bulgaria.pmtiles --download
+
+schema_name: OffRoad Bulgaria
+schema_description: Офроуд карта на България от OpenStreetMap
+attribution: <a href="https://www.openstreetmap.org/copyright" target="_blank">&copy; OpenStreetMap contributors</a>
+
+args:
+  area:
+    description: Geofabrik area to download
+    default: bulgaria
+
+sources:
+  osm:
+    type: osm
+    url: geofabrik:${ args.area }
+  water_polygons:
+    type: shapefile
+    url: https://osmdata.openstreetmap.de/download/water-polygons-split-3857.zip
+
+layers:
+
+# ---------- Sea, lakes, reservoirs ----------
+- id: water
+  features:
+  - source: water_polygons
+    geometry: polygon
+  - source: osm
+    geometry: polygon
+    min_zoom: 8
+    min_size: 2
+    include_when:
+      natural: water
+      waterway: riverbank
+      landuse: reservoir
+
+# ---------- Rivers and streams (streams matter for fords) ----------
+- id: waterway
+  features:
+  - source: osm
+    geometry: line
+    include_when:
+      waterway: [river, stream, canal]
+    min_zoom:
+      default_value: 12
+      overrides:
+        9: { waterway: river }
+    attributes:
+    - key: kind
+      tag_value: waterway
+    - key: name
+      min_zoom: 12
+    - key: intermittent
+
+# ---------- Land cover: forest, scrub, meadows, rock ----------
+- id: landcover
+  features:
+  - source: osm
+    geometry: polygon
+    min_zoom: 9
+    min_size: 4
+    include_when:
+      landuse: [forest, meadow, grass, farmland, orchard, vineyard, residential, industrial, quarry]
+      natural: [wood, scrub, heath, grassland, bare_rock, scree, sand, beach, wetland]
+    attributes:
+    - key: kind
+      type: string
+      value:
+        forest: { landuse: forest }
+        wood: { natural: wood }
+        scrub: { natural: [scrub, heath] }
+        grass: { landuse: [meadow, grass], natural: grassland }
+        farmland: { landuse: [farmland, orchard, vineyard] }
+        urban: { landuse: [residential, industrial] }
+        rock: { natural: [bare_rock, scree], landuse: quarry }
+        sand: { natural: [sand, beach] }
+        wetland: { natural: wetland }
+
+# ---------- Protected areas (often closed to motor vehicles) ----------
+- id: protected
+  features:
+  - source: osm
+    geometry: polygon
+    min_zoom: 8
+    min_size: 4
+    include_when:
+      boundary: [national_park, protected_area]
+      leisure: nature_reserve
+    attributes:
+    - key: name
+    - key: protect_class
+
+# ---------- Paved road network ----------
+- id: roads
+  features:
+  - source: osm
+    geometry: line
+    include_when:
+      highway: [motorway, trunk, primary, secondary, tertiary, unclassified, residential, living_street, service,
+                motorway_link, trunk_link, primary_link, secondary_link, tertiary_link]
+    min_zoom:
+      default_value: 13
+      overrides:
+        5: { highway: [motorway, trunk] }
+        7: { highway: primary }
+        9: { highway: [secondary, motorway_link, trunk_link] }
+        10: { highway: [tertiary, primary_link, secondary_link, tertiary_link] }
+        12: { highway: [unclassified, residential] }
+    attributes:
+    - key: highway
+    - key: name
+      min_zoom: 12
+    - key: ref
+      min_zoom: 10
+    - key: surface
+      min_zoom: 12
+    - key: access
+      min_zoom: 12
+    - key: bridge
+      min_zoom: 13
+    - key: tunnel
+      min_zoom: 13
+
+# ---------- Off-road: tracks and paths (the main reason for this map) ----------
+- id: tracks
+  features:
+  - source: osm
+    geometry: line
+    include_when:
+      highway: [track, path, bridleway]
+    min_zoom:
+      default_value: 13
+      overrides:
+        11: { highway: track }
+    attributes:
+    - key: highway
+    - key: tracktype
+    - key: surface
+    - key: smoothness
+    - key: access
+    - key: motor_vehicle
+    - key: vehicle
+    - key: atv
+    - key: motorcycle
+    - key: name
+      min_zoom: 13
+    - key: ford
+      min_zoom: 13
+
+# ---------- Places ----------
+- id: places
+  features:
+  - source: osm
+    geometry: point
+    include_when:
+      place: [city, town, village, hamlet, locality]
+    min_zoom:
+      default_value: 13
+      overrides:
+        6: { place: city }
+        8: { place: town }
+        11: { place: village }
+    attributes:
+    - key: kind
+      tag_value: place
+    - key: name
+    - key: population
+      type: integer
+
+# ---------- Peaks, passes, huts, springs, fuel ----------
+- id: poi
+  features:
+  - source: osm
+    geometry: point
+    include_when:
+      natural: [peak, saddle, spring, cave_entrance]
+      mountain_pass: 'yes'
+      tourism: [alpine_hut, wilderness_hut, viewpoint, camp_site]
+      amenity: [fuel, drinking_water, shelter]
+      ford: 'yes'
+    min_zoom:
+      default_value: 13
+      overrides:
+        10: { natural: peak }
+        12: { tourism: [alpine_hut, wilderness_hut], amenity: fuel }
+    attributes:
+    - key: kind
+      type: string
+      value:
+        peak: { natural: peak }
+        pass: { natural: saddle, mountain_pass: 'yes' }
+        spring: { natural: spring, amenity: drinking_water }
+        hut: { tourism: [alpine_hut, wilderness_hut], amenity: shelter }
+        viewpoint: { tourism: viewpoint }
+        camp: { tourism: camp_site }
+        fuel: { amenity: fuel }
+        ford: { ford: 'yes' }
+        cave: { natural: cave_entrance }
+    - key: name
+    - key: ele

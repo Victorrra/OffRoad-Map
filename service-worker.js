@@ -5,14 +5,15 @@
  *   cache of recently viewed tiles, and only then from the network.
  */
 
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL_CACHE = 'offroad-shell-' + VERSION;
 const TILE_CACHE = 'offroad-tiles-v1';            // filled by downloadArea() in index.html — never auto-deleted
 const RUNTIME_TILE_CACHE = 'offroad-tiles-runtime-v1';
 const RUNTIME_TILE_LIMIT = 1500;                  // recently viewed tiles kept for spotty coverage
 const NETWORK_TIMEOUT_MS = 4000;
 
-const SHELL_FILES = ['./', './index.html', './manifest.json', './icon.png'];
+const SHELL_FILES = ['./', './index.html', './manifest.json', './icon.png',
+                     './vendor/pmtiles.js', './vendor/protomaps-leaflet.js'];
 const CDN_FILES = [
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css',
   'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js',
@@ -58,6 +59,10 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;               // Overpass POSTs etc. go straight to the network
 
   const url = new URL(req.url);
+
+  // The vector map is read with range requests or downloaded into OPFS by the page
+  // itself — never copy the (large) file into the Cache API as well.
+  if (url.pathname.endsWith('.pmtiles')) return;
 
   if (TILE_HOSTS.has(url.hostname)) {
     event.respondWith(tileFirst(req));
