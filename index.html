@@ -181,6 +181,12 @@
   }
   #navArrow{display:inline-block; font-size:16px; transition:transform .3s;}
   #navCloseBtn{margin-left:4px; font-size:14px; padding:0 4px;}
+  #navVoiceBtn{font-size:16px; padding:0 4px; cursor:pointer;}
+  #navBar.turnMode{ justify-content:flex-start; padding:8px 12px; background:#241a3d; border-color:#7c4dff; box-shadow:0 2px 10px rgba(0,0,0,.35); }
+  #navBar.turnMode #navArrow{ font-size:30px; line-height:1; min-width:34px; text-align:center; transform:none !important; }
+  #navBar.turnMode #navText{ flex:1; display:flex; flex-direction:column; gap:2px; }
+  #navMain{ font-size:15px; font-weight:700; color:#fff; }
+  #navSub{ font-size:11px; font-weight:500; color:#d8c8f5; }
   .destIcon{font-size:24px; line-height:1; filter:drop-shadow(0 1px 2px rgba(0,0,0,.7));}
   /* Vector map: hide hairline seams between canvas tiles when the map is rotated */
   .vector-base canvas.leaflet-tile{ width:257px !important; height:257px !important; }
@@ -287,6 +293,7 @@
   <div id="navBar">
     <span id="navArrow">↑</span>
     <span id="navText">До целта: -- км</span>
+    <span id="navVoiceBtn" title="Гласови указания">🔊</span>
     <span id="navCloseBtn">✕</span>
   </div>
   <div id="routeBar">
@@ -325,6 +332,7 @@
 <script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
 <script src="vendor/pmtiles.js"></script>
 <script src="vendor/protomaps-leaflet.js"></script>
+<script src="router.js"></script>
 <script>
 // ---------- Storage: IndexedDB (no 5 MB localStorage limit for tracks & photos) ----------
 var OffroadDB = (function(){
@@ -475,16 +483,21 @@ function startOffroadApp(preload){
   }
 
 
-  // ---------- Offline vector map of Bulgaria ----------
-  // bulgaria.pmtiles is built from OpenStreetMap by .github/workflows/build-map.yml
-  // and published next to index.html. It can be used online (streamed with HTTP
-  // range requests) or downloaded once into the phone's storage for full offline use.
-  var MAP_FILE = 'bulgaria.pmtiles';
+  // ---------- Offline data: vector map + routing graph of Bulgaria ----------
+  // Both files are built from OpenStreetMap by .github/workflows/build-map.yml and published
+  // next to index.html. They can be downloaded once into the phone's storage for offline use.
+  var DATA_FILES = {
+    map:     { name: 'bulgaria.pmtiles',     metaKey: 'mapMeta',     blobKey: 'mapBlob',     label: 'картата' },
+    routing: { name: 'bulgaria-routing.bin', metaKey: 'routingMeta', blobKey: 'routingBlob', label: 'навигацията' }
+  };
+  var MAP_FILE = DATA_FILES.map.name;
   var mapSource = null;          // pmtiles.PMTiles instance in use
   var mapIsLocal = false;        // true when reading from the downloaded copy
   var vectorLayer = null;
-  var mapDownloading = false;
-  var localMapMeta = null;       // {etag, size, savedAt}
+  var dataDownloading = false;
+  var localMeta = { map: null, routing: null };   // {etag, size, savedAt, store}
+  var localFiles = { map: null, routing: null };  // File/Blob of the downloaded copies
+  var remoteInfo = { map: null, routing: null };  // {size, etag} | {missing:true} | null
 
   // pmtiles "Source" that reads byte ranges from a File/Blob in local storage
   function BlobSource(blob, key){ this.blob = blob; this.key = key; }
@@ -495,54 +508,48 @@ function startOffroadApp(preload){
 
   // --- Storage: Origin Private File System when available, IndexedDB Blob otherwise ---
   var hasOPFS = !!(navigator.storage && navigator.storage.getDirectory);
-
   function opfsDir(){ return navigator.storage.getDirectory(); }
 
-  function loadStoredMap(){
-    return OffroadDB.get('mapMeta').catch(function(){ return null; }).then(function(meta){
+  function loadStoredFile(kind){
+    var spec = DATA_FILES[kind];
+    return OffroadDB.get(spec.metaKey).catch(function(){ return null; }).then(function(meta){
       if(!meta || !meta.size) return null;
-      var fromOpfs = (hasOPFS && meta.store === 'opfs')
-        ? opfsDir().then(function(d){ return d.getFileHandle(MAP_FILE); })
-                   .then(function(h){ return h.getFile(); })
-        : OffroadDB.get('mapBlob');
-      return fromOpfs.then(function(file){
+      var read = (hasOPFS && meta.store === 'opfs')
+        ? opfsDir().then(function(d){ return d.getFileHandle(spec.name); }).then(function(h){ return h.getFile(); })
+        : OffroadDB.get(spec.blobKey);
+      return read.then(function(file){
         // A size mismatch means an interrupted download — ignore the partial file
-        if(file && file.size === meta.size){ localMapMeta = meta; return file; }
+        if(file && file.size === meta.size){ localMeta[kind] = meta; localFiles[kind] = file; return file; }
         return null;
       }).catch(function(){ return null; });
     });
   }
 
-  function deleteStoredMap(){
-    var jobs = [OffroadDB.set('mapMeta', null), OffroadDB.set('mapBlob', null)];
-    if(hasOPFS){
-      jobs.push(opfsDir().then(function(d){ return d.removeEntry(MAP_FILE); }).catch(function(){}));
-    }
-    localMapMeta = null;
+  function deleteStoredFile(kind){
+    var spec = DATA_FILES[kind];
+    localMeta[kind] = null; localFiles[kind] = null;
+    var jobs = [OffroadDB.set(spec.metaKey, null), OffroadDB.set(spec.blobKey, null)];
+    if(hasOPFS) jobs.push(opfsDir().then(function(d){ return d.removeEntry(spec.name); }).catch(function(){}));
     return Promise.all(jobs).catch(function(){});
   }
 
-  // Streams the response body to storage, reporting progress. Resolves with {file, store}.
-  function writeMapToStorage(body, total, onProgress){
-    var got = 0;
+  // Streams a response body to storage, reporting progress. Resolves with {file, store}.
+  function writeToStorage(kind, body, onProgress){
+    var spec = DATA_FILES[kind], got = 0;
     function pump(reader, onChunk){
       return reader.read().then(function(r){
         if(r.done) return;
         got += r.value.byteLength;
-        return Promise.resolve(onChunk(r.value)).then(function(){
-          onProgress(got, total);
-          return pump(reader, onChunk);
-        });
+        return Promise.resolve(onChunk(r.value)).then(function(){ onProgress(got); return pump(reader, onChunk); });
       });
     }
     var opfsWritable = hasOPFS
-      ? opfsDir().then(function(d){ return d.getFileHandle(MAP_FILE, { create: true }); })
+      ? opfsDir().then(function(d){ return d.getFileHandle(spec.name, { create: true }); })
           .then(function(h){
             if(!h.createWritable) throw new Error('no createWritable');
             return h.createWritable().then(function(w){ return { handle: h, writer: w }; });
           })
       : Promise.reject(new Error('no OPFS'));
-
     return opfsWritable.then(function(o){
       // Streamed straight to disk — the whole file never sits in memory
       return pump(body.getReader(), function(chunk){ return o.writer.write(chunk); })
@@ -552,12 +559,55 @@ function startOffroadApp(preload){
     }, function(){
       // Fallback (older Safari): collect chunks into a Blob and keep it in IndexedDB
       var chunks = [];
-      return pump(body.getReader(), function(chunk){ chunks.push(chunk); })
-        .then(function(){
-          var blob = new Blob(chunks, { type: 'application/octet-stream' });
-          chunks = null;
-          return OffroadDB.set('mapBlob', blob).then(function(){ return { file: blob, store: 'idb' }; });
-        });
+      return pump(body.getReader(), function(chunk){ chunks.push(chunk); }).then(function(){
+        var blob = new Blob(chunks, { type: 'application/octet-stream' });
+        chunks = null;
+        return OffroadDB.set(spec.blobKey, blob).then(function(){ return { file: blob, store: 'idb' }; });
+      });
+    });
+  }
+
+  // Downloads one data file into storage. onProgress(gotBytes, totalBytes)
+  function downloadFile(kind, onProgress){
+    var spec = DATA_FILES[kind], etag = '';
+    // Forget the old copy first, so an interrupted download is never mistaken for a full one
+    return OffroadDB.set(spec.metaKey, null).catch(function(){}).then(function(){
+      return fetch(spec.name, { cache: 'no-store' });
+    }).then(function(res){
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      etag = res.headers.get('ETag') || res.headers.get('Last-Modified') || '';
+      var total = +res.headers.get('Content-Length') || 0;
+      return writeToStorage(kind, res.body, function(got){ onProgress(got, total); });
+    }).then(function(r){
+      var meta = { etag: etag, size: r.file.size, savedAt: Date.now(), store: r.store };
+      if(r.store === 'opfs') OffroadDB.set(spec.blobKey, null).catch(function(){});
+      return OffroadDB.set(spec.metaKey, meta).then(function(){
+        localMeta[kind] = meta; localFiles[kind] = r.file;
+        return r.file;
+      });
+    });
+  }
+
+  function checkRemote(kind){
+    if(!navigator.onLine) return Promise.resolve(null);
+    return fetch(DATA_FILES[kind].name, { method: 'HEAD', cache: 'no-store' }).then(function(res){
+      if(res.status === 404) return { missing: true };
+      if(!res.ok) return null;
+      return { size: +res.headers.get('Content-Length') || 0, etag: res.headers.get('ETag') || res.headers.get('Last-Modified') || '' };
+    }).catch(function(){ return null; });
+  }
+  function checkAllRemote(){
+    return Promise.all([checkRemote('map'), checkRemote('routing')]).then(function(r){
+      remoteInfo.map = r[0]; remoteInfo.routing = r[1];
+    });
+  }
+  // Which files need downloading: missing locally, or a newer version on the server
+  function filesToFetch(){
+    return ['map', 'routing'].filter(function(kind){
+      var rem = remoteInfo[kind], loc = localMeta[kind];
+      if(rem && rem.missing) return false;
+      if(!loc) return true;
+      return !!(rem && rem.etag && loc.etag && rem.etag !== loc.etag);
     });
   }
 
@@ -700,97 +750,122 @@ function startOffroadApp(preload){
   function fmtMb(bytes){ return (bytes / 1048576).toFixed(bytes < 10485760 ? 1 : 0) + ' MB'; }
   function fmtDate(ts){ return new Date(ts).toLocaleDateString('bg-BG', { day: '2-digit', month: '2-digit', year: 'numeric' }); }
 
-  function refreshMapUi(remote){
-    mapDeleteBtn.style.display = mapIsLocal ? 'block' : 'none';
-    if(mapIsLocal && localMapMeta){
-      var newer = remote && remote.etag && localMapMeta.etag && remote.etag !== localMapMeta.etag;
-      mapDownloadBtn.textContent = newer ? '🔄 Обнови офроуд картата' : '✅ Офроуд картата е в телефона';
-      mapDownloadBtn.disabled = !newer;
-      mapStatus.textContent = fmtMb(localMapMeta.size) + ', свалена на ' + fmtDate(localMapMeta.savedAt) + (newer ? ' · има нова версия' : '');
-      return;
-    }
-    mapDownloadBtn.disabled = false;
-    if(remote && remote.missing){
+  function refreshMapUi(){
+    if(dataDownloading) return;
+    var hasLocal = !!(localMeta.map || localMeta.routing);
+    mapDeleteBtn.style.display = hasLocal ? 'block' : 'none';
+    var todo = filesToFetch();
+    var sizeTodo = todo.reduce(function(s, k){ return s + ((remoteInfo[k] && remoteInfo[k].size) || 0); }, 0);
+    var sizeTxt = sizeTodo ? ' (' + fmtMb(sizeTodo) + ')' : '';
+
+    if(remoteInfo.map && remoteInfo.map.missing && !localMeta.map){
       mapDownloadBtn.textContent = '⬇️ Свали офроуд картата на България';
       mapDownloadBtn.disabled = true;
       mapStatus.textContent = 'Картата още не е генерирана на сървъра.';
-    } else if(remote && remote.size){
-      mapDownloadBtn.textContent = '⬇️ Свали офроуд картата на България (' + fmtMb(remote.size) + ')';
-      mapStatus.textContent = 'Без сваляне картата работи само с интернет.';
-    } else {
-      mapDownloadBtn.textContent = '⬇️ Свали офроуд картата на България';
-      mapStatus.textContent = navigator.onLine ? 'Без сваляне картата работи само с интернет.' : 'Няма връзка — картата не е свалена.';
+      return;
     }
+    if(!todo.length && hasLocal){
+      mapDownloadBtn.textContent = '✅ Картата и навигацията са в телефона';
+      mapDownloadBtn.disabled = true;
+    } else if(!hasLocal){
+      mapDownloadBtn.textContent = '⬇️ Свали картата и навигацията' + sizeTxt;
+      mapDownloadBtn.disabled = !navigator.onLine;
+    } else {
+      var newer = todo.some(function(k){ return !!localMeta[k]; });
+      mapDownloadBtn.textContent = (newer ? '🔄 Обнови офлайн данните' : '⬇️ Свали ' + DATA_FILES[todo[0]].label) + sizeTxt;
+      mapDownloadBtn.disabled = !navigator.onLine;
+    }
+    var parts = [];
+    if(localMeta.map) parts.push('Карта ' + fmtMb(localMeta.map.size) + ', ' + fmtDate(localMeta.map.savedAt));
+    if(localMeta.routing) parts.push('навигация ' + fmtMb(localMeta.routing.size));
+    if(!parts.length) parts.push(navigator.onLine ? 'Без сваляне картата работи само с интернет.' : 'Няма връзка — данните не са свалени.');
+    mapStatus.textContent = parts.join(' · ');
   }
 
-  function checkRemoteMap(){
-    if(!navigator.onLine) return Promise.resolve(null);
-    return fetch(MAP_FILE, { method: 'HEAD', cache: 'no-store' }).then(function(res){
-      if(res.status === 404) return { missing: true };
-      if(!res.ok) return null;
-      return {
-        size: +res.headers.get('Content-Length') || 0,
-        etag: res.headers.get('ETag') || res.headers.get('Last-Modified') || ''
-      };
-    }).catch(function(){ return null; });
-  }
-
-  function downloadMap(){
-    if(mapDownloading) return;
-    if(!navigator.onLine){ toast('Нужна е интернет връзка, за предпочитане Wi-Fi.', 3000); return; }
-    mapDownloading = true;
+  function downloadData(kinds){
+    if(dataDownloading) return Promise.resolve(false);
+    if(!navigator.onLine){ toast('Нужна е интернет връзка, за предпочитане Wi-Fi.', 3000); return Promise.resolve(false); }
+    kinds = kinds || filesToFetch();
+    if(!kinds.length) return Promise.resolve(true);
+    dataDownloading = true;
     mapDownloadBtn.disabled = true;
-    mapDownloadBtn.textContent = '⏳ Сваляне... 0%';
-    var etag = '';
-    // Forget the old copy first, so an interrupted download is never mistaken for a full one
-    OffroadDB.set('mapMeta', null).catch(function(){}).then(function(){
-      return fetch(MAP_FILE, { cache: 'no-store' });
-    }).then(function(res){
-      if(!res.ok) throw new Error('HTTP ' + res.status);
-      etag = res.headers.get('ETag') || res.headers.get('Last-Modified') || '';
-      var total = +res.headers.get('Content-Length') || 0;
-      var lastPct = -1;
-      return writeMapToStorage(res.body, total, function(got, tot){
-        var pct = tot ? Math.floor(got * 100 / tot) : -1;
-        if(pct !== lastPct){
-          lastPct = pct;
-          mapDownloadBtn.textContent = '⏳ Сваляне... ' + (pct >= 0 ? pct + '%' : fmtMb(got));
-        }
+    var totalAll = kinds.reduce(function(s, k){ return s + ((remoteInfo[k] && remoteInfo[k].size) || 0); }, 0);
+    var doneBytes = 0;
+    var chain = Promise.resolve();
+    kinds.forEach(function(kind){
+      chain = chain.then(function(){
+        var lastTxt = '';
+        return downloadFile(kind, function(got, total){
+          var all = totalAll || total, cur = doneBytes + got;
+          var txt = '⏳ Сваляне на ' + DATA_FILES[kind].label + '... ' + (all ? Math.min(99, Math.floor(cur * 100 / all)) + '%' : fmtMb(cur));
+          if(txt !== lastTxt){ lastTxt = txt; mapDownloadBtn.textContent = txt; }
+        }).then(function(file){
+          doneBytes += file.size;
+          if(kind === 'map') setMapSource(new BlobSource(file, 'local-' + localMeta.map.savedAt), true);
+          if(kind === 'routing') router = null;    // rebuilt from the new file on next use
+        });
       });
-    }).then(function(r){
-      var meta = { etag: etag, size: r.file.size, savedAt: Date.now(), store: r.store };
-      if(r.store === 'opfs') OffroadDB.set('mapBlob', null).catch(function(){});
-      return OffroadDB.set('mapMeta', meta).then(function(){
-        localMapMeta = meta;
-        setMapSource(new BlobSource(r.file, 'local-' + meta.savedAt), true);
-        toast('Офроуд картата е свалена и работи без интернет.', 3500);
-      });
+    });
+    return chain.then(function(){
+      toast('Готово — картата и навигацията работят без интернет.', 3500);
+      return true;
     }).catch(function(err){
-      console.warn('Map download failed:', err);
+      console.warn('Download failed:', err);
       toast('Свалянето не успя (' + (err && err.name === 'QuotaExceededError' ? 'няма достатъчно памет' : 'прекъсната връзка') + '). Опитай пак.', 4000);
-    }).then(function(){
-      mapDownloading = false;
-      checkRemoteMap().then(refreshMapUi);
+      return false;
+    }).then(function(ok){
+      dataDownloading = false;
+      return checkAllRemote().then(function(){ refreshMapUi(); return ok; });
     });
   }
 
-  mapDownloadBtn.addEventListener('click', downloadMap);
+  mapDownloadBtn.addEventListener('click', function(){ downloadData(); });
   mapDeleteBtn.addEventListener('click', function(){
-    if(!confirm('Да изтрия ли офлайн картата от телефона? Ще трябва да я свалиш отново, за да работи без интернет.')) return;
-    deleteStoredMap().then(function(){
+    if(!confirm('Да изтрия ли офлайн картата и навигацията от телефона? Ще трябва да ги свалиш отново, за да работят без интернет.')) return;
+    Promise.all([deleteStoredFile('map'), deleteStoredFile('routing')]).then(function(){
+      router = null;
       setMapSource(MAP_FILE, false);
-      toast('Офлайн картата е изтрита.', 2500);
-      checkRemoteMap().then(refreshMapUi);
+      toast('Офлайн данните са изтрити.', 2500);
+      checkAllRemote().then(refreshMapUi);
     });
   });
 
-  // Start with the online file, switch to the local copy as soon as it's found
+  // --- Offline router (router.js) ---
+  var router = null, routerLoading = null;
+  // Resolves with a ready OffroadRouter, or null when routing data isn't available
+  function ensureRouter(){
+    if(router) return Promise.resolve(router);
+    if(routerLoading) return routerLoading;
+    routerLoading = (localFiles.routing ? Promise.resolve(localFiles.routing) : loadStoredFile('routing'))
+      .then(function(file){
+        if(file) return file;
+        // Not downloaded yet: fetch it now when online (it's then kept for offline use)
+        if(!navigator.onLine || !window.OffroadRouter) return null;
+        return checkRemote('routing').then(function(rem){
+          remoteInfo.routing = rem;
+          if(!rem || rem.missing) return null;
+          toast('Сваляне на данните за навигация (' + fmtMb(rem.size) + ')...', 3000);
+          return downloadData(['routing']).then(function(ok){ return ok ? localFiles.routing : null; });
+        });
+      })
+      .then(function(file){ return file ? file.arrayBuffer() : null; })
+      .then(function(buf){
+        if(buf) router = new OffroadRouter(buf);
+        return router;
+      })
+      .catch(function(err){ console.warn('Router unavailable:', err); return null; })
+      .then(function(r){ routerLoading = null; return r; });
+    return routerLoading;
+  }
+
+  // Start with the online map, switch to the local copy as soon as it's found
   setMapSource(MAP_FILE, false);
-  loadStoredMap().then(function(file){
-    if(file) setMapSource(new BlobSource(file, 'local-' + localMapMeta.savedAt), true);
-    refreshMapUi(null);
-    return checkRemoteMap();
-  }).then(function(remote){ if(remote) refreshMapUi(remote); });
+  Promise.all([loadStoredFile('map'), loadStoredFile('routing')]).then(function(files){
+    if(files[0]) setMapSource(new BlobSource(files[0], 'local-' + localMeta.map.savedAt), true);
+    refreshMapUi();
+    return checkAllRemote();
+  }).then(refreshMapUi);
+  window.addEventListener('online', function(){ checkAllRemote().then(refreshMapUi); });
 
   // ---------- Layer panel UI ----------
   var layerPanel = document.getElementById('layerPanel');
@@ -1964,6 +2039,57 @@ function startOffroadApp(preload){
   var NAV_SNAP_MAX_M = 700;       // how far a point may be from a known way to "snap" onto it
 
   var navPicking = false, navActive = false, navLine = null, navDestMarker = null, navDest = null;
+  // Turn-by-turn state (offline router)
+  var navRoute = null, navHintIdx = 0, navSpoken = {}, navOffCount = 0, navLastReroute = 0, navRerouting = false;
+  var navVoiceOn = (function(){ try { return localStorage.getItem('offroad_voice') !== 'off'; } catch(e){ return true; } })();
+  var navVoiceBtn = document.getElementById('navVoiceBtn');
+  navVoiceBtn.textContent = navVoiceOn ? '🔊' : '🔇';
+  navVoiceBtn.addEventListener('click', function(e){
+    e.stopPropagation();
+    navVoiceOn = !navVoiceOn;
+    navVoiceBtn.textContent = navVoiceOn ? '🔊' : '🔇';
+    try { localStorage.setItem('offroad_voice', navVoiceOn ? 'on' : 'off'); } catch(err){}
+    if(navVoiceOn) speak('Гласовите указания са включени'); else if(window.speechSynthesis) speechSynthesis.cancel();
+  });
+
+  var bgVoice = null;
+  function pickVoice(){
+    if(!window.speechSynthesis) return;
+    var voices = speechSynthesis.getVoices();
+    bgVoice = voices.filter(function(v){ return /^bg/i.test(v.lang); })[0] || null;
+  }
+  if(window.speechSynthesis){ pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+  function speak(text){
+    if(!navVoiceOn || !window.speechSynthesis) return;
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = 'bg-BG';
+    if(bgVoice) u.voice = bgVoice;
+    u.rate = 1.0;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  }
+  // iOS only allows speech that was first started from a tap — call this inside a tap handler
+  function unlockSpeech(){
+    if(!window.speechSynthesis || unlockSpeech.done) return;
+    unlockSpeech.done = true;
+    var u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    speechSynthesis.speak(u);
+  }
+  function fmtDist(m){
+    if(m < 1000) return (m < 100 ? Math.round(m / 10) * 10 : Math.round(m / 50) * 50) + ' м';
+    return (m / 1000).toFixed(m < 10000 ? 1 : 0).replace('.', ',') + ' км';
+  }
+  function speechDist(m){
+    if(m >= 1000) return (m / 1000).toFixed(1).replace('.0', '').replace('.', ' цяло ') + ' километра';
+    return (Math.round(m / 50) * 50) + ' метра';
+  }
+  function setNavText(main, sub){
+    navText.textContent = '';
+    var a = document.createElement('span'); a.id = 'navMain'; a.textContent = main;
+    var b = document.createElement('span'); b.id = 'navSub'; b.textContent = sub;
+    navText.appendChild(a); navText.appendChild(b);
+  }
   var navBtn = document.getElementById('navBtn');
   var navBar = document.getElementById('navBar');
   var navText = document.getElementById('navText');
@@ -1971,12 +2097,83 @@ function startOffroadApp(preload){
 
   function updateNavStats(){
     if(!navActive || !lastLatLng || !navDest) return;
+    if(navRoute){ updateTurnByTurn(); return; }
     var dist = haversine(lastLatLng, navDest);
     navText.textContent = 'До целта: ' + (dist < 1000 ? Math.round(dist) + ' м' : (dist / 1000).toFixed(1) + ' км') + ' · ' + estimateEta(dist);
     navArrow.style.transform = 'rotate(' + bearing(lastLatLng, navDest) + 'deg)';
   }
 
+  function updateTurnByTurn(){
+    var loc = OffroadRouter.locate(navRoute, lastLatLng[0], lastLatLng[1], navHintIdx);
+    navHintIdx = loc.idx;
+    var remaining = Math.max(0, navRoute.distance - loc.along);
+
+    // Off the line: re-route from here after a couple of GPS fixes (works offline)
+    if(loc.off > 50){
+      navOffCount++;
+      if(navOffCount >= 3 && !navRerouting && Date.now() - navLastReroute > 15000){
+        navLastReroute = Date.now();
+        rerouteFromHere();
+      }
+    } else {
+      navOffCount = 0;
+    }
+
+    var step = null;
+    for(var i = 0; i < navRoute.steps.length; i++){
+      if(navRoute.steps[i].dist > loc.along + 5){ step = navRoute.steps[i]; break; }
+    }
+    if(!step || remaining < 25){
+      navArrow.textContent = '🏁';
+      setNavText('Пристигнахте', 'Целта е на ' + fmtDist(haversine(lastLatLng, navDest)));
+      if(!navSpoken.arrive){ navSpoken.arrive = true; speak('Пристигнахте'); }
+      return;
+    }
+    var toStep = step.dist - loc.along;
+    navArrow.textContent = step.arrow;
+    var mainTxt = step.kind === 'arrive' ? 'След ' + fmtDist(toStep) + ' пристигане' : fmtDist(toStep) + ' · ' + step.text;
+    setNavText(mainTxt, 'Остават ' + fmtDist(remaining) + ' · ' + routeEta(remaining) + (loc.off > 50 ? ' · ⚠️ извън маршрута' : ''));
+
+    // Voice: once at ~300 m and once just before the turn
+    var key = step.idx + ':' + step.kind;
+    if(step.kind !== 'arrive'){
+      if(toStep <= 300 && toStep > 120 && !navSpoken[key + 'far']){
+        navSpoken[key + 'far'] = true;
+        speak('След ' + speechDist(toStep) + ' ' + step.speech.charAt(0).toLowerCase() + step.speech.slice(1));
+      } else if(toStep <= 50 && !navSpoken[key + 'now']){
+        navSpoken[key + 'far'] = navSpoken[key + 'now'] = true;
+        speak(step.speech);
+        if(navigator.vibrate) navigator.vibrate(150);
+      }
+    }
+  }
+
+  // Remaining time from the router's per-road-type speeds (dirt vs asphalt), not one average
+  function routeEta(remaining){
+    var secs = navRoute.distance > 0 ? navRoute.duration * remaining / navRoute.distance : 0;
+    var mins = Math.round(secs / 60);
+    if(mins < 1) return '<1 мин';
+    if(mins < 60) return '~' + mins + ' мин';
+    var h = Math.floor(mins / 60), m = mins % 60;
+    return '~' + h + 'ч' + (m > 0 ? ' ' + m + 'м' : '');
+  }
+
+  function rerouteFromHere(){
+    if(!router || !navDest || !lastLatLng) return;
+    navRerouting = true;
+    var r = router.route(lastLatLng[0], lastLatLng[1], navDest[0], navDest[1]);
+    navRerouting = false;
+    if(r.error) return;
+    toast('Маршрутът е преизчислен.', 1800);
+    speak('Преизчисляване на маршрута');
+    activateNavRoute(r.points, r, { keepView: true });
+  }
+
   function clearNav(){
+    navRoute = null; navSpoken = {}; navOffCount = 0;
+    navBar.classList.remove('turnMode');
+    navArrow.textContent = '↑';
+    if(window.speechSynthesis) speechSynthesis.cancel();
     navActive = false;
     navPicking = false;
     navBtn.classList.remove('picking');
@@ -2074,19 +2271,43 @@ function startOffroadApp(preload){
     navBtn.classList.remove('picking');
 
     if(!lastLatLng){ toast('Изчакай GPS сигнал, преди да навигираш.', 2500); return; }
-
-    var straight = haversine(lastLatLng, dest);
-    if(straight > NAV_MAX_STRAIGHT_KM * 1000){
-      toast('Целта е твърде далеч (>' + NAV_MAX_STRAIGHT_KM + ' км) за навигация по трасета.', 3500);
-      return;
-    }
+    unlockSpeech();
 
     navDest = dest;
     if(navDestMarker) map.removeLayer(navDestMarker);
     navDestMarker = L.marker(dest, {icon: L.divIcon({className:'', html:'<div class="destIcon">🏁</div>', iconSize:[28,28], iconAnchor:[14,26]})}).addTo(map);
-
-    toast('Изчисляване на маршрут по картографираните пътища...', 3000);
     navBtn.classList.add('picking');
+
+    ensureRouter().then(function(r){
+      if(!r){ navigateViaOverpass(dest); return; }
+      var res = r.route(lastLatLng[0], lastLatLng[1], dest[0], dest[1]);
+      navBtn.classList.remove('picking');
+      if(res.error){
+        var why = { 'start-far': 'Няма път в близост до теб', 'end-far': 'Няма път в близост до целта',
+                    'disconnected': 'Целта не е свързана с пътищата около теб', 'no-route': 'Не намерих маршрут' }[res.error] || 'Не намерих маршрут';
+        toast(why + ' — показвам права линия.', 3500);
+        activateNavRoute([lastLatLng, dest]);
+        return;
+      }
+      var parts = [];
+      if(res.km.track >= 0.1) parts.push(res.km.track.toFixed(1).replace('.', ',') + ' км черни');
+      if(res.km.paved >= 0.1) parts.push(res.km.paved.toFixed(1).replace('.', ',') + ' км асфалт');
+      if(res.km.path >= 0.1) parts.push(res.km.path.toFixed(1).replace('.', ',') + ' км пътеки');
+      toast('Маршрут ' + fmtDist(res.distance) + ' (' + parts.join(', ') + ')', 4000);
+      activateNavRoute(res.points, res);
+    });
+  }
+
+  // Online fallback when the offline routing data isn't available
+  function navigateViaOverpass(dest){
+    var straight = haversine(lastLatLng, dest);
+    if(straight > NAV_MAX_STRAIGHT_KM * 1000){
+      navBtn.classList.remove('picking');
+      toast('Целта е твърде далеч (>' + NAV_MAX_STRAIGHT_KM + ' км) за навигация по трасета.', 3500);
+      return;
+    }
+
+    toast('Изчисляване на маршрут по картографираните пътища (онлайн)...', 3000);
 
     var b = L.latLngBounds([lastLatLng, dest]).pad(0.25);
     var bbox = b.getSouth() + ',' + b.getWest() + ',' + b.getNorth() + ',' + b.getEast();
@@ -2123,13 +2344,21 @@ function startOffroadApp(preload){
       });
   }
 
-  function activateNavRoute(points){
+  function activateNavRoute(points, info, opts){
+    opts = opts || {};
     if(navLine) map.removeLayer(navLine);
-    navLine = L.polyline(points, {color:'#b388ff', weight:5, opacity:0.9, dashArray:'1,10'}).addTo(map);
+    navRoute = info || null;
+    navHintIdx = 0; navSpoken = {}; navOffCount = 0;
+    navBar.classList.toggle('turnMode', !!navRoute);
+    if(!navRoute){ navArrow.textContent = '↑'; }
+    navLine = navRoute
+      ? L.polyline(points, {color:'#7c4dff', weight:6, opacity:0.85}).addTo(map)
+      : L.polyline(points, {color:'#b388ff', weight:5, opacity:0.9, dashArray:'1,10'}).addTo(map);
     navActive = true;
     navBar.style.display = 'flex';
     updateNavStats();
-    map.fitBounds(navLine.getBounds(), {padding:[60,60]});
+    if(!opts.keepView) map.fitBounds(navLine.getBounds(), {padding:[60,60]});
+    if(navRoute && !opts.keepView && navRoute.steps.length) speak('Маршрутът е готов. ' + speechDist(navRoute.distance) + '.');
 
     // Also register it as the (invisible) planned route, so the off-route alarm can be
     // switched on for it too without drawing a second, duplicate line on the map.
