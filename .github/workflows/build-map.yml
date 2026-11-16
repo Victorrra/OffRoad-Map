@@ -30,14 +30,26 @@ jobs:
           java-version: '21'
 
       - name: Download Planetiler
-        run: curl -fsSL -o planetiler.jar https://github.com/onthegomap/planetiler/releases/download/v0.10.2/planetiler.jar
+        run: curl -fsSL --retry 3 -o planetiler.jar https://github.com/onthegomap/planetiler/releases/download/v0.10.2/planetiler.jar
+
+      - name: Download OSM data (Bulgaria + water polygons)
+        run: |
+          mkdir -p data/sources
+          UA="OffRoad-Map map builder (github.com/${{ github.repository }})"
+          curl -fL --retry 5 --retry-delay 20 --retry-all-errors -A "$UA" \
+            -o data/sources/bulgaria.osm.pbf \
+            https://download.geofabrik.de/europe/bulgaria-latest.osm.pbf
+          curl -fL --retry 5 --retry-delay 20 --retry-all-errors -A "$UA" \
+            -o data/sources/water-polygons.zip \
+            https://osmdata.openstreetmap.de/download/water-polygons-split-3857.zip
+          ls -lh data/sources
 
       - name: Build bulgaria.pmtiles
-        # --download fetches the Geofabrik extract of Bulgaria and the OSM water polygons
         run: >
           java -Xmx6g -jar planetiler.jar generate-custom
           --schema=map/offroad-schema.yml
-          --download
+          --osm_path=data/sources/bulgaria.osm.pbf
+          --water_polygons_path=data/sources/water-polygons.zip
           --output=bulgaria.pmtiles
           --force
 
