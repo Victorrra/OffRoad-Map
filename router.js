@@ -431,6 +431,36 @@
     return best || { idx: 0, off: Infinity, along: 0 };
   };
 
+  /* Joins routes between consecutive stops into one route. Arriving at an intermediate
+   * stop becomes a 'via' step. stopDist[i] = distance from start to stop i. */
+  Router.join = function(legs){
+    var points = [], cum = [], steps = [], km = { track: 0, path: 0, paved: 0 }, duration = 0, stopDist = [];
+    legs.forEach(function(leg, k){
+      var base = points.length, offset = cum.length ? cum[cum.length - 1] : 0, skip = 0, gap = 0;
+      if(base > 0){
+        var last = points[base - 1], first = leg.points[0];
+        if(Math.abs(last[0] - first[0]) < 1e-9 && Math.abs(last[1] - first[1]) < 1e-9) skip = 1;
+        else gap = haversine(last[0], last[1], first[0], first[1]);
+      }
+      for(var i = skip; i < leg.points.length; i++){ points.push(leg.points[i]); cum.push(offset + gap + leg.cum[i]); }
+      leg.steps.forEach(function(st){
+        var c = {};
+        for(var key in st) c[key] = st[key];
+        c.idx = base + Math.max(0, st.idx - skip);
+        c.dist = offset + gap + st.dist;
+        if(st.kind === 'arrive' && k < legs.length - 1){
+          c.kind = 'via'; c.arrow = '📍'; c.text = 'Спирка ' + (k + 1); c.speech = 'Достигнахте спирка ' + (k + 1);
+        }
+        steps.push(c);
+      });
+      km.track += leg.km.track; km.path += leg.km.path; km.paved += leg.km.paved;
+      duration += leg.duration;
+      stopDist.push(cum[cum.length - 1]);
+    });
+    return { points: points, cum: cum, distance: cum.length ? cum[cum.length - 1] : 0,
+             duration: duration, km: km, steps: steps, stopDist: stopDist };
+  };
+
   Router.haversine = haversine;
   global.OffroadRouter = Router;
 })(typeof window !== 'undefined' ? window : globalThis);

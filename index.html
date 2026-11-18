@@ -183,6 +183,26 @@
   #navCloseBtn{margin-left:4px; font-size:14px; padding:0 4px;}
   #navVoiceBtn, #navModeBtn{font-size:16px; padding:0 4px; cursor:pointer;}
   #navModeBtn{ display:none; }
+  #routePlanner{
+    display:none; background:#1d1630; border:1px solid #7c4dff; border-radius:12px;
+    padding:8px 10px; color:#eee; font-size:13px; box-shadow:0 2px 12px rgba(0,0,0,.4);
+  }
+  #routePlanner .rpHead{ display:flex; justify-content:space-between; font-weight:700; color:#d8c8f5; margin-bottom:4px; }
+  #routePlanner .rpHead span:last-child{ cursor:pointer; padding:0 4px; }
+  .rpRow{ display:flex; align-items:center; gap:6px; padding:5px 0; border-top:1px solid rgba(255,255,255,.08); }
+  .rpName{ font-weight:600; white-space:nowrap; }
+  .rpInfo{ flex:1; font-size:11px; color:#b9a8dc; }
+  .rpMode, .rpDel, .rpBtns button{
+    background:#2c2248; color:#fff; border:1px solid #4a3a78; border-radius:8px;
+    font:inherit; font-size:12px; padding:5px 8px; cursor:pointer; white-space:nowrap;
+  }
+  .rpMode.fast{ border-color:#f0a04b; }
+  .rpMode.offroad{ border-color:#3ddc3d; }
+  .rpBtns{ display:flex; gap:8px; margin-top:6px; }
+  .rpBtns button{ flex:1; padding:8px; font-size:13px; font-weight:600; }
+  #rpGo{ background:#5b3cc4; border-color:#7c4dff; }
+  .viaIcon{ width:24px; height:24px; border-radius:50%; background:#7c4dff; color:#fff; font:700 13px/24px sans-serif;
+            text-align:center; border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.5); }
   #navBar.turnMode #navModeBtn{ display:inline; }
   #navBar.turnMode{ justify-content:flex-start; padding:8px 12px; background:#241a3d; border-color:#7c4dff; box-shadow:0 2px 10px rgba(0,0,0,.35); }
   #navBar.turnMode #navArrow{ font-size:30px; line-height:1; min-width:34px; text-align:center; transform:none !important; }
@@ -292,6 +312,11 @@
 </div>
 
 <div id="bottombar">
+  <div id="routePlanner">
+    <div class="rpHead"><span>🧭 Маршрут</span><span id="rpClose">✕</span></div>
+    <div id="rpList"></div>
+    <div class="rpBtns"><button id="rpAdd">＋ Добави точка</button><button id="rpGo">▶ Тръгвай</button></div>
+  </div>
   <div id="navBar">
     <span id="navArrow">↑</span>
     <span id="navText">До целта: -- км</span>
@@ -2089,6 +2114,8 @@ function startOffroadApp(preload){
   var navPicking = false, navActive = false, navLine = null, navDestMarker = null, navDest = null;
   // Turn-by-turn state (offline router)
   var navRoute = null, navHintIdx = 0, navSpoken = {}, navOffCount = 0, navLastReroute = 0, navRerouting = false;
+  // Multi-stop routes: each stop has the mode of the leg that leads to it
+  var navStops = [], navLegs = [], navPassed = 0, navStopMarkers = [];
   var navVoiceOn = (function(){ try { return localStorage.getItem('offroad_voice') !== 'off'; } catch(e){ return true; } })();
   var navVoiceBtn = document.getElementById('navVoiceBtn');
   navVoiceBtn.textContent = navVoiceOn ? '🔊' : '🔇';
@@ -2103,25 +2130,30 @@ function startOffroadApp(preload){
   // Route mode: 'offroad' prefers dirt roads even when slower, 'fast' takes the quickest way
   var navMode = (function(){ try { return localStorage.getItem('offroad_navmode') === 'fast' ? 'fast' : 'offroad'; } catch(e){ return 'offroad'; } })();
   var navModeBtn = document.getElementById('navModeBtn');
-  function showNavMode(){ navModeBtn.textContent = navMode === 'fast' ? '⚡' : '🌲'; }
+  function nextStop(){ return navStops[Math.min(navPassed, navStops.length - 1)]; }
+  function showNavMode(){
+    var m = navStops.length ? nextStop().mode : navMode;
+    navModeBtn.textContent = m === 'fast' ? '⚡' : '🌲';
+  }
   showNavMode();
   navModeBtn.addEventListener('click', function(e){
     e.stopPropagation();
-    navMode = navMode === 'fast' ? 'offroad' : 'fast';
+    var st = navStops.length ? nextStop() : null;
+    var m = (st ? st.mode : navMode) === 'fast' ? 'offroad' : 'fast';
+    navMode = m;                                   // also the default for new stops
     try { localStorage.setItem('offroad_navmode', navMode); } catch(err){}
+    toast(m === 'fast' ? '⚡ Най-бърз път до следващата точка' : '🌲 Офроуд до следващата точка — предпочита черни пътища', 2500);
+    if(st){ st.mode = m; planAndShow({ silent: true }); }
     showNavMode();
-    toast(navMode === 'fast' ? '⚡ Най-бърз маршрут' : '🌲 Офроуд маршрут — предпочита черни пътища', 2500);
-    if(router && navDest && lastLatLng){
-      var r = router.route(lastLatLng[0], lastLatLng[1], navDest[0], navDest[1], { mode: navMode });
-      if(!r.error){ announceRoute(r); activateNavRoute(r.points, r); }
-    }
   });
   function announceRoute(res){
     var parts = [];
     if(res.km.track >= 0.1) parts.push(res.km.track.toFixed(1).replace('.', ',') + ' км черни');
     if(res.km.paved >= 0.1) parts.push(res.km.paved.toFixed(1).replace('.', ',') + ' км асфалт');
     if(res.km.path >= 0.1) parts.push(res.km.path.toFixed(1).replace('.', ',') + ' км пътеки');
-    toast((navMode === 'fast' ? '⚡ ' : '🌲 ') + 'Маршрут ' + fmtDist(res.distance) + ' (' + parts.join(', ') + ')', 4000);
+    var modes = navStops.map(function(s){ return s.mode; }).filter(function(m, i, a){ return a.indexOf(m) === i; });
+    var icon = modes.length === 1 ? (modes[0] === 'fast' ? '⚡ ' : '🌲 ') : '🧭 ';
+    toast(icon + 'Маршрут ' + fmtDist(res.distance) + ' (' + parts.join(', ') + ')', 4000);
   }
 
   var bgVoice = null;
@@ -2178,6 +2210,11 @@ function startOffroadApp(preload){
   function updateTurnByTurn(){
     var loc = OffroadRouter.locate(navRoute, lastLatLng[0], lastLatLng[1], navHintIdx);
     navHintIdx = loc.idx;
+    if(navRoute.stopDist){
+      var passedBefore = navPassed;
+      while(navPassed < navRoute.stopDist.length - 1 && loc.along >= navRoute.stopDist[navPassed] - 15) navPassed++;
+      if(navPassed !== passedBefore){ showNavMode(); renderPlanner(); }
+    }
     var remaining = Math.max(0, navRoute.distance - loc.along);
 
     // Off the line: re-route from here after a couple of GPS fixes (works offline)
@@ -2231,18 +2268,121 @@ function startOffroadApp(preload){
   }
 
   function rerouteFromHere(){
-    if(!router || !navDest || !lastLatLng) return;
+    if(!router || !navStops.length || !lastLatLng) return;
     navRerouting = true;
-    var r = router.route(lastLatLng[0], lastLatLng[1], navDest[0], navDest[1], { mode: navMode });
+    planAndShow({ silent: true });
     navRerouting = false;
-    if(r.error) return;
     toast('Маршрутът е преизчислен.', 1800);
     speak('Преизчисляване на маршрута');
-    activateNavRoute(r.points, r, { keepView: true });
   }
+
+  // A straight line for a leg the router can't connect
+  function straightLeg(a, b){
+    var d = haversine(a, b);
+    return { points: [a, b], cum: [0, d], distance: d, duration: d / (15 / 3.6), km: { track: 0, path: 0, paved: 0 },
+             steps: [{ kind: 'arrive', idx: 1, dist: d, arrow: '🏁', text: 'Пристигане', speech: 'Пристигнахте' }] };
+  }
+  function stopName(i){ return i === navStops.length - 1 ? 'целта' : 'спирка ' + (i + 1); }
+
+  // Routes from the current position through all remaining stops and shows the result
+  function planAndShow(opts){
+    opts = opts || {};
+    if(!router || !navStops.length || !lastLatLng) return;
+    if(navPassed > 0){ navStops.splice(0, navPassed); navPassed = 0; }
+    var prev = lastLatLng, legs = [], failed = [];
+    navStops.forEach(function(st, i){
+      var leg = router.route(prev[0], prev[1], st.lat, st.lng, { mode: st.mode });
+      if(leg.error){ failed.push(i); leg = straightLeg(prev, [st.lat, st.lng]); }
+      legs.push(leg);
+      prev = [st.lat, st.lng];
+    });
+    navLegs = legs;
+    var route = OffroadRouter.join(legs);
+    var last = navStops[navStops.length - 1];
+    navDest = [last.lat, last.lng];
+    drawStopMarkers();
+    if(failed.length) toast('Няма път до ' + failed.map(stopName).join(', ') + ' — права линия за този участък.', 4000);
+    else if(!opts.silent) announceRoute(route);
+    activateNavRoute(route.points, route, { keepView: !opts.fit });
+    showNavMode();
+    renderPlanner();
+  }
+
+  function drawStopMarkers(){
+    navStopMarkers.forEach(function(m){ map.removeLayer(m); });
+    navStopMarkers = [];
+    if(navDestMarker){ map.removeLayer(navDestMarker); navDestMarker = null; }
+    navStops.forEach(function(st, i){
+      var last = i === navStops.length - 1;
+      var icon = last
+        ? L.divIcon({className:'', html:'<div class="destIcon">🏁</div>', iconSize:[28,28], iconAnchor:[14,26]})
+        : L.divIcon({className:'', html:'<div class="viaIcon">' + (i + 1) + '</div>', iconSize:[28,28], iconAnchor:[14,14]});
+      var m = L.marker([st.lat, st.lng], { icon: icon }).addTo(map);
+      if(last) navDestMarker = m; else navStopMarkers.push(m);
+    });
+  }
+
+  // ---- Route planner panel ----
+  var routePlanner = document.getElementById('routePlanner');
+  var rpList = document.getElementById('rpList');
+  function openPlanner(){ routePlanner.style.display = 'block'; renderPlanner(); }
+  function closePlanner(){ routePlanner.style.display = 'none'; }
+  function legSummary(leg){
+    if(!leg) return '';
+    var t = fmtDist(leg.distance);
+    if(leg.km.track >= 0.1) t += ' · ' + leg.km.track.toFixed(1).replace('.', ',') + ' черни';
+    if(leg.km.paved >= 0.1) t += ' · ' + leg.km.paved.toFixed(1).replace('.', ',') + ' асфалт';
+    return t;
+  }
+  function renderPlanner(){
+    if(routePlanner.style.display !== 'block') return;
+    rpList.textContent = '';
+    navStops.forEach(function(st, i){
+      var row = document.createElement('div'); row.className = 'rpRow';
+      var name = document.createElement('span'); name.className = 'rpName';
+      name.textContent = (i < navPassed ? '✓ ' : '') + (i === navStops.length - 1 ? '🏁 Цел' : '📍 Спирка ' + (i + 1));
+      var info = document.createElement('span'); info.className = 'rpInfo'; info.textContent = legSummary(navLegs[i]);
+      var mode = document.createElement('button'); mode.className = 'rpMode ' + st.mode;
+      mode.textContent = st.mode === 'fast' ? '⚡ Асфалт' : '🌲 Черни';
+      mode.title = 'Как да се стигне до тази точка';
+      mode.addEventListener('click', function(){
+        st.mode = st.mode === 'fast' ? 'offroad' : 'fast';
+        planAndShow({ silent: false });
+      });
+      var del = document.createElement('button'); del.className = 'rpDel'; del.textContent = '✕';
+      del.addEventListener('click', function(){
+        navStops.splice(i, 1);
+        if(i < navPassed) navPassed--;
+        if(!navStops.length){ clearNav(); return; }
+        planAndShow({ silent: false });
+      });
+      row.appendChild(name); row.appendChild(info); row.appendChild(mode); row.appendChild(del);
+      rpList.appendChild(row);
+    });
+  }
+  document.getElementById('rpClose').addEventListener('click', closePlanner);
+  document.getElementById('rpGo').addEventListener('click', function(){
+    closePlanner();
+    if(lastLatLng) map.setView(lastLatLng, Math.max(map.getZoom(), 15));
+    toast('Приятно каране! Докосни указанието, за да промениш маршрута.', 3000);
+  });
+  document.getElementById('rpAdd').addEventListener('click', function(){
+    navPicking = true;
+    navBtn.classList.add('picking');
+    toast('Докосни картата там, където е следващата точка', 3000);
+  });
+  // Tapping the instruction opens the planner
+  navText.addEventListener('click', function(){
+    if(!navRoute || !navStops.length) return;
+    if(routePlanner.style.display === 'block') closePlanner(); else openPlanner();
+  });
 
   function clearNav(){
     navRoute = null; navSpoken = {}; navOffCount = 0;
+    navStops = []; navLegs = []; navPassed = 0;
+    navStopMarkers.forEach(function(m){ map.removeLayer(m); });
+    navStopMarkers = [];
+    closePlanner();
     navBar.classList.remove('turnMode');
     navArrow.textContent = '↑';
     if(window.speechSynthesis) speechSynthesis.cancel();
@@ -2345,24 +2485,22 @@ function startOffroadApp(preload){
     if(!lastLatLng){ toast('Изчакай GPS сигнал, преди да навигираш.', 2500); return; }
     unlockSpeech();
 
-    navDest = dest;
-    if(navDestMarker) map.removeLayer(navDestMarker);
-    navDestMarker = L.marker(dest, {icon: L.divIcon({className:'', html:'<div class="destIcon">🏁</div>', iconSize:[28,28], iconAnchor:[14,26]})}).addTo(map);
     navBtn.classList.add('picking');
 
     ensureRouter().then(function(r){
-      if(!r){ navigateViaOverpass(dest); return; }
-      var res = r.route(lastLatLng[0], lastLatLng[1], dest[0], dest[1], { mode: navMode });
-      navBtn.classList.remove('picking');
-      if(res.error){
-        var why = { 'start-far': 'Няма път в близост до теб', 'end-far': 'Няма път в близост до целта',
-                    'disconnected': 'Целта не е свързана с пътищата около теб', 'no-route': 'Не намерих маршрут' }[res.error] || 'Не намерих маршрут';
-        toast(why + ' — показвам права линия.', 3500);
-        activateNavRoute([lastLatLng, dest]);
+      if(!r){
+        // No offline routing data: single destination over Overpass (online)
+        navStops = [];
+        navDest = dest;
+        if(navDestMarker) map.removeLayer(navDestMarker);
+        navDestMarker = L.marker(dest, {icon: L.divIcon({className:'', html:'<div class="destIcon">🏁</div>', iconSize:[28,28], iconAnchor:[14,26]})}).addTo(map);
+        navigateViaOverpass(dest);
         return;
       }
-      announceRoute(res);
-      activateNavRoute(res.points, res);
+      navBtn.classList.remove('picking');
+      navStops.push({ lat: dest[0], lng: dest[1], mode: navMode });
+      planAndShow({ fit: true });
+      openPlanner();
     });
   }
 
