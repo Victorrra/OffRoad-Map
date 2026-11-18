@@ -1,5 +1,7 @@
-# Builds the offline vector map of Bulgaria (bulgaria.pmtiles) from OpenStreetMap
-# and stores it as an asset of the "map-latest" release. The Pages deploy picks it up from there.
+# Builds the offline data of Bulgaria from OpenStreetMap:
+#   bulgaria.pmtiles      — vector map (Planetiler)
+#   bulgaria-routing.bin  — ATV routing graph (map/build-routing.py)
+# Both are stored as assets of the "map-latest" release; the Pages deploy picks them up from there.
 name: Build offroad map
 
 on:
@@ -8,10 +10,10 @@ on:
     - cron: '0 2 * * 1'              # every Monday 02:00 UTC — fresh OSM data weekly
   push:
     branches: [main, master]
-    paths: ['map/offroad-schema.yml']
+    paths: ['map/**']
 
 permissions:
-  contents: write                    # create/update the release asset
+  contents: write                    # create/update the release assets
 
 concurrency:
   group: build-map
@@ -28,6 +30,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Download Planetiler
         run: curl -fsSL --retry 3 -o planetiler.jar https://github.com/onthegomap/planetiler/releases/download/v0.10.2/planetiler.jar
@@ -53,8 +59,13 @@ jobs:
           --output=bulgaria.pmtiles
           --force
 
-      - name: Map size
-        run: ls -lh bulgaria.pmtiles
+      - name: Build bulgaria-routing.bin
+        run: |
+          pip install osmium==4.3.2
+          python map/build-routing.py data/sources/bulgaria.osm.pbf bulgaria-routing.bin
+
+      - name: Sizes
+        run: ls -lh bulgaria.pmtiles bulgaria-routing.bin
 
       - name: Publish to the map-latest release
         env:
@@ -66,4 +77,4 @@ jobs:
               --notes "Генерира се автоматично от OpenStreetMap всеки понеделник. © OpenStreetMap contributors, ODbL." \
               --latest=false
           fi
-          gh release upload map-latest bulgaria.pmtiles --clobber
+          gh release upload map-latest bulgaria.pmtiles bulgaria-routing.bin --clobber
