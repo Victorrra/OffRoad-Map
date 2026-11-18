@@ -1,4 +1,4 @@
-# Publishes the app to GitHub Pages together with the latest bulgaria.pmtiles.
+# Publishes the app to GitHub Pages together with the latest offline data.
 # Settings → Pages → Build and deployment → Source must be "GitHub Actions".
 name: Deploy to GitHub Pages
 
@@ -34,12 +34,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir _site
-          cp index.html service-worker.js manifest.json icon.png _site/
+          cp index.html service-worker.js router.js manifest.json icon.png _site/
           cp -r vendor _site/
-          if gh release download map-latest --pattern bulgaria.pmtiles --dir _site; then
-            echo "Map included: $(du -h _site/bulgaria.pmtiles | cut -f1)"
+          if gh release download map-latest --pattern 'bulgaria*' --dir _site; then
+            ls -lh _site/bulgaria*
           else
-            echo "::warning::No map yet — run the 'Build offroad map' workflow once."
+            echo "::warning::No offline data yet — run the 'Build offroad map' workflow once."
           fi
 
       - uses: actions/configure-pages@v5
