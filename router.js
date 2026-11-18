@@ -237,17 +237,20 @@
     return best;
   };
 
-  Router.prototype._costPerM = function(cls, preferOffroad){
+  // pavedFactor: how much more "expensive" asphalt is than its driving time.
+  // 1 = fastest route; OFFROAD_PAVED_FACTOR = prefer dirt even when it is slower.
+  var OFFROAD_PAVED_FACTOR = 3.5;
+  Router.prototype._costPerM = function(cls, pavedFactor){
     var c = CLASSES[cls] || CLASSES[6];
     var spm = 3.6 / c.kmh;                     // seconds per metre
-    return (preferOffroad && c.group === 'paved') ? spm * 1.6 : spm;
+    return c.group === 'paved' ? spm * pavedFactor : spm;
   };
 
-  /* Finds a route. opts: { preferOffroad: bool (default true), maxSnapM: number }
+  /* Finds a route. opts: { mode: 'offroad' (default) | 'fast', maxSnapM: number }
    * Returns { points, cum, distance, duration, steps, km: {track, path, paved} } or { error } */
   Router.prototype.route = function(fromLat, fromLon, toLat, toLon, opts){
     opts = opts || {};
-    var prefer = opts.preferOffroad !== false;
+    var prefer = opts.mode === 'fast' ? 1 : OFFROAD_PAVED_FACTOR;
     var maxSnap = opts.maxSnapM || 1500;
     var s = this.snap(fromLat, fromLon, maxSnap), t = this.snap(toLat, toLon, maxSnap);
     if(!s) return { error: 'start-far' };

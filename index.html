@@ -181,7 +181,9 @@
   }
   #navArrow{display:inline-block; font-size:16px; transition:transform .3s;}
   #navCloseBtn{margin-left:4px; font-size:14px; padding:0 4px;}
-  #navVoiceBtn{font-size:16px; padding:0 4px; cursor:pointer;}
+  #navVoiceBtn, #navModeBtn{font-size:16px; padding:0 4px; cursor:pointer;}
+  #navModeBtn{ display:none; }
+  #navBar.turnMode #navModeBtn{ display:inline; }
   #navBar.turnMode{ justify-content:flex-start; padding:8px 12px; background:#241a3d; border-color:#7c4dff; box-shadow:0 2px 10px rgba(0,0,0,.35); }
   #navBar.turnMode #navArrow{ font-size:30px; line-height:1; min-width:34px; text-align:center; transform:none !important; }
   #navBar.turnMode #navText{ flex:1; display:flex; flex-direction:column; gap:2px; }
@@ -293,6 +295,7 @@
   <div id="navBar">
     <span id="navArrow">↑</span>
     <span id="navText">До целта: -- км</span>
+    <span id="navModeBtn" title="Режим на маршрута">🌲</span>
     <span id="navVoiceBtn" title="Гласови указания">🔊</span>
     <span id="navCloseBtn">✕</span>
   </div>
@@ -1134,7 +1137,7 @@ function startOffroadApp(preload){
       }
       return fetch(OVERPASS_ENDPOINTS[i], {method:'POST', body:'data=' + encodeURIComponent(query)})
         .then(function(r){
-          if(r.status === 429 || r.status === 504){
+          if(r.status === 429 || r.status === 502 || r.status === 503 || r.status === 504){
             var e = new Error('busy'); e.retry = true; e.status = r.status;
             throw e;
           }
@@ -1142,6 +1145,7 @@ function startOffroadApp(preload){
           return r.json();
         })
         .catch(function(err){
+          if(err instanceof TypeError){ err = new Error('няма връзка'); err.retry = true; err.status = 'мрежа'; }
           if(err && err.retry && i < OVERPASS_ENDPOINTS.length - 1){
             return tryEndpoint(i + 1);
           }
@@ -1164,16 +1168,25 @@ function startOffroadApp(preload){
       return;
     }
     var b = map.getBounds();
-    var bbox = b.getSouth() + ',' + b.getWest() + ',' + b.getNorth() + ',' + b.getEast();
-    var query = '[out:json][timeout:25];(' +
-      'way["highway"~"^(track|path|bridleway|unclassified|service)$"](' + bbox + ');' +
-      ');out body geom;';
-
     loadTrailsBtn.classList.add('loading');
     loadTrailsBtn.textContent = '...';
-    toast('Зареждане на трасета от OpenStreetMap...', 2000);
 
-    overpassFetch(query).then(function(data){
+    // The offline map has every track of Bulgaria — use it whenever it's reachable.
+    var useMapData = mapSource && (mapIsLocal || (navigator.onLine && remoteInfo.map && !remoteInfo.map.missing));
+    var source;
+    if(useMapData){
+      toast(mapIsLocal ? 'Зареждане на трасета от офлайн картата...' : 'Зареждане на трасета от картата...', 1500);
+      source = trailsFromMap(b);
+    } else {
+      var bbox = b.getSouth() + ',' + b.getWest() + ',' + b.getNorth() + ',' + b.getEast();
+      var query = '[out:json][timeout:25];(' +
+        'way["highway"~"^(track|path|bridleway|unclassified|service)$"](' + bbox + ');' +
+        ');out body geom;';
+      toast('Зареждане на трасета от OpenStreetMap...', 2000);
+      source = overpassFetch(query);
+    }
+
+    source.then(function(data){
       trailsLayerGroup.clearLayers();
       var count = 0;
       (data.elements||[]).forEach(function(el){
@@ -1206,6 +1219,41 @@ function startOffroadApp(preload){
     });
   }
   loadTrailsBtn.addEventListener('click', loadTrails);
+
+  // Reads tracks/paths (and minor roads) for the given bounds from the vector map
+  // and returns them in the same shape as an Overpass answer: {elements:[{type, tags, geometry}]}
+  var TRAIL_ROAD_KINDS = { unclassified: 1, service: 1 };
+  function trailsFromMap(bounds){
+    var Z = 14, n = Math.pow(2, Z);
+    var x0 = lon2tile(bounds.getWest(), Z), x1 = lon2tile(bounds.getEast(), Z);
+    var y0 = lat2tile(bounds.getNorth(), Z), y1 = lat2tile(bounds.getSouth(), Z);
+    var count = (x1 - x0 + 1) * (y1 - y0 + 1);
+    if(count > 160) return Promise.reject(new Error('приближи картата малко повече'));
+    var src = new protomapsL.PmtilesSource(mapSource, false), EXT = 4096, jobs = [];
+    function toLatLng(x, y, px, py){
+      var lon = (x + px / EXT) / n * 360 - 180;
+      var lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + py / EXT) / n))) * 180 / Math.PI;
+      return { lat: lat, lon: lon };
+    }
+    for(var x = x0; x <= x1; x++) for(var y = y0; y <= y1; y++) (function(x, y){
+      jobs.push(src.get({ z: Z, x: x, y: y }, EXT).then(function(layers){
+        var out = [];
+        [['tracks', null], ['roads', TRAIL_ROAD_KINDS]].forEach(function(spec){
+          (layers.get(spec[0]) || []).forEach(function(f){
+            if(spec[1] && !spec[1][f.props.highway]) return;
+            f.geom.forEach(function(line){
+              // keep only the part inside this tile, so lines from neighbouring tiles don't overlap
+              var pts = line.filter(function(p){ return p.x >= -64 && p.x <= EXT + 64 && p.y >= -64 && p.y <= EXT + 64; });
+              if(pts.length < 2) return;
+              out.push({ type: 'way', tags: f.props, geometry: pts.map(function(p){ return toLatLng(x, y, p.x, p.y); }) });
+            });
+          });
+        });
+        return out;
+      }));
+    })(x, y);
+    return Promise.all(jobs).then(function(parts){ return { elements: [].concat.apply([], parts) }; });
+  }
 
   // ---------- Offline area download ----------
   function lon2tile(lon, z){ return Math.floor((lon + 180) / 360 * Math.pow(2, z)); }
@@ -2052,6 +2100,30 @@ function startOffroadApp(preload){
     if(navVoiceOn) speak('Гласовите указания са включени'); else if(window.speechSynthesis) speechSynthesis.cancel();
   });
 
+  // Route mode: 'offroad' prefers dirt roads even when slower, 'fast' takes the quickest way
+  var navMode = (function(){ try { return localStorage.getItem('offroad_navmode') === 'fast' ? 'fast' : 'offroad'; } catch(e){ return 'offroad'; } })();
+  var navModeBtn = document.getElementById('navModeBtn');
+  function showNavMode(){ navModeBtn.textContent = navMode === 'fast' ? '⚡' : '🌲'; }
+  showNavMode();
+  navModeBtn.addEventListener('click', function(e){
+    e.stopPropagation();
+    navMode = navMode === 'fast' ? 'offroad' : 'fast';
+    try { localStorage.setItem('offroad_navmode', navMode); } catch(err){}
+    showNavMode();
+    toast(navMode === 'fast' ? '⚡ Най-бърз маршрут' : '🌲 Офроуд маршрут — предпочита черни пътища', 2500);
+    if(router && navDest && lastLatLng){
+      var r = router.route(lastLatLng[0], lastLatLng[1], navDest[0], navDest[1], { mode: navMode });
+      if(!r.error){ announceRoute(r); activateNavRoute(r.points, r); }
+    }
+  });
+  function announceRoute(res){
+    var parts = [];
+    if(res.km.track >= 0.1) parts.push(res.km.track.toFixed(1).replace('.', ',') + ' км черни');
+    if(res.km.paved >= 0.1) parts.push(res.km.paved.toFixed(1).replace('.', ',') + ' км асфалт');
+    if(res.km.path >= 0.1) parts.push(res.km.path.toFixed(1).replace('.', ',') + ' км пътеки');
+    toast((navMode === 'fast' ? '⚡ ' : '🌲 ') + 'Маршрут ' + fmtDist(res.distance) + ' (' + parts.join(', ') + ')', 4000);
+  }
+
   var bgVoice = null;
   function pickVoice(){
     if(!window.speechSynthesis) return;
@@ -2161,7 +2233,7 @@ function startOffroadApp(preload){
   function rerouteFromHere(){
     if(!router || !navDest || !lastLatLng) return;
     navRerouting = true;
-    var r = router.route(lastLatLng[0], lastLatLng[1], navDest[0], navDest[1]);
+    var r = router.route(lastLatLng[0], lastLatLng[1], navDest[0], navDest[1], { mode: navMode });
     navRerouting = false;
     if(r.error) return;
     toast('Маршрутът е преизчислен.', 1800);
@@ -2280,7 +2352,7 @@ function startOffroadApp(preload){
 
     ensureRouter().then(function(r){
       if(!r){ navigateViaOverpass(dest); return; }
-      var res = r.route(lastLatLng[0], lastLatLng[1], dest[0], dest[1]);
+      var res = r.route(lastLatLng[0], lastLatLng[1], dest[0], dest[1], { mode: navMode });
       navBtn.classList.remove('picking');
       if(res.error){
         var why = { 'start-far': 'Няма път в близост до теб', 'end-far': 'Няма път в близост до целта',
@@ -2289,11 +2361,7 @@ function startOffroadApp(preload){
         activateNavRoute([lastLatLng, dest]);
         return;
       }
-      var parts = [];
-      if(res.km.track >= 0.1) parts.push(res.km.track.toFixed(1).replace('.', ',') + ' км черни');
-      if(res.km.paved >= 0.1) parts.push(res.km.paved.toFixed(1).replace('.', ',') + ' км асфалт');
-      if(res.km.path >= 0.1) parts.push(res.km.path.toFixed(1).replace('.', ',') + ' км пътеки');
-      toast('Маршрут ' + fmtDist(res.distance) + ' (' + parts.join(', ') + ')', 4000);
+      announceRoute(res);
       activateNavRoute(res.points, res);
     });
   }

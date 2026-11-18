@@ -5,7 +5,7 @@
  *   cache of recently viewed tiles, and only then from the network.
  */
 
-const VERSION = 'v4';
+const VERSION = 'v5';
 const SHELL_CACHE = 'offroad-shell-' + VERSION;
 const TILE_CACHE = 'offroad-tiles-v1';            // filled by downloadArea() in index.html — never auto-deleted
 const RUNTIME_TILE_CACHE = 'offroad-tiles-runtime-v1';
