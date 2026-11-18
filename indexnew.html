@@ -1,0 +1,2452 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>OffRoad Maps</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="OffRoad">
+<meta name="theme-color" content="#1b2a1f">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<style>
+  :root{
+    --accent:#7cd957;
+    --danger:#ff5c5c;
+    --warn:#ffb020;
+    --panel:#1b1f1b;
+    --panel2:#232823;
+    --text:#eef4ee;
+  }
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0c0e0c;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    -webkit-tap-highlight-color:transparent; user-select:none;}
+  #map{position:absolute;inset:0;background:#111;}
+
+  /* Top bar */
+  #topbar{
+    position:absolute; top:0; left:0; right:0; z-index:1000;
+    display:flex; align-items:center; gap:8px;
+    padding:calc(env(safe-area-inset-top,0px) + 8px) 10px 8px 10px;
+    background:linear-gradient(to bottom, rgba(10,12,10,.85), rgba(10,12,10,0));
+    pointer-events:none;
+  }
+  #topbar > *{pointer-events:auto;}
+  #searchBox{
+    flex:1; display:flex; align-items:center; background:var(--panel);
+    border:1px solid #3a4a3a; border-radius:12px; padding:8px 10px; gap:8px;
+    box-shadow:0 2px 10px rgba(0,0,0,.4);
+  }
+  #searchInput{
+    flex:1; background:transparent; border:none; outline:none; color:var(--text);
+    font-size:15px;
+  }
+  #searchBox svg{flex-shrink:0;}
+  #searchResults{
+    position:absolute; top:56px; left:10px; right:10px; z-index:1001;
+    background:var(--panel); border-radius:12px; overflow:hidden;
+    box-shadow:0 4px 16px rgba(0,0,0,.5); display:none; max-height:40vh; overflow-y:auto;
+  }
+  .searchResult{padding:10px 12px; font-size:14px; color:var(--text); border-bottom:1px solid #2c332c;}
+  .searchResult:active{background:#2c332c;}
+
+  .iconBtn{
+    width:42px; height:42px; border-radius:12px; background:var(--panel);
+    border:1px solid #3a4a3a; display:flex; align-items:center; justify-content:center;
+    box-shadow:0 2px 10px rgba(0,0,0,.4); color:var(--text);
+  }
+  .iconBtn.active{background:var(--accent); color:#0c0e0c; border-color:var(--accent);}
+
+  /* Right side floating controls */
+  #rightControls{
+    position:absolute; right:10px; top:50%; transform:translateY(-50%); z-index:1000;
+    display:flex; flex-direction:column; gap:10px;
+  }
+
+  /* Bottom bar */
+  #bottombar{
+    position:absolute; left:0; right:0; bottom:0; z-index:1000;
+    padding:10px 10px calc(env(safe-area-inset-bottom,0px) + 10px) 10px;
+    background:linear-gradient(to top, rgba(10,12,10,.9), rgba(10,12,10,0));
+    display:flex; flex-direction:column; gap:8px;
+  }
+  #coordsBar{
+    display:flex; justify-content:space-between; align-items:center;
+    color:#b7c9b7; font-size:11px; padding:0 4px; font-variant-numeric:tabular-nums;
+  }
+  #actionRow{ display:flex; gap:8px; }
+  .bigBtn{
+    flex:1; display:flex; align-items:center; justify-content:center; gap:6px;
+    background:var(--panel); border:1px solid #3a4a3a; border-radius:14px;
+    padding:12px 8px; color:var(--text); font-size:13px; font-weight:600;
+    box-shadow:0 2px 10px rgba(0,0,0,.4);
+  }
+  .bigBtn.loading{opacity:.6;}
+  .bigBtn.on{background:var(--accent); color:#0c0e0c; border-color:var(--accent);}
+
+  /* Legend */
+  #legend{
+    position:absolute; z-index:1000; background:var(--panel); border:1px solid #3a4a3a;
+    border-radius:12px; padding:10px 12px; font-size:12px; color:var(--text);
+    box-shadow:0 2px 10px rgba(0,0,0,.4); display:none; min-width:180px;
+  }
+  #legend h4{margin:0 0 6px 0; font-size:12px; color:#a9c2a9; font-weight:600;}
+  .legendRow{display:flex; align-items:center; gap:8px; margin:4px 0;}
+  .legendSwatch{width:18px; height:4px; border-radius:2px; flex-shrink:0;}
+
+  /* Layer panel */
+  #layerPanel{
+    position:absolute; z-index:1002; background:var(--panel); border:1px solid #3a4a3a;
+    border-radius:14px; padding:12px; box-shadow:0 4px 20px rgba(0,0,0,.5);
+    right:10px; top:70px; width:220px; max-height:78vh; overflow-y:auto; display:none;
+  }
+  #layerPanel h4{margin:2px 0 8px 2px; font-size:12px; color:#a9c2a9; font-weight:600;}
+  .layerOpt{display:flex; align-items:center; gap:8px; padding:8px 6px; border-radius:8px; font-size:13px; color:var(--text);}
+  .layerOpt.active{background:#2c332c;}
+  .layerOpt input{accent-color:var(--accent);}
+  hr.sep{border:none; border-top:1px solid #333a33; margin:8px 0;}
+
+  .leaflet-control-attribution{background:rgba(10,12,10,.6)!important; color:#8a988a!important; font-size:9px!important;}
+  .leaflet-control-attribution a{color:#a9c2a9!important;}
+  .leaflet-control-zoom{display:none;}
+
+  #toast{
+    position:absolute; left:50%; top:70px; transform:translateX(-50%); z-index:1003;
+    background:var(--panel); color:var(--text); padding:10px 16px; border-radius:10px;
+    font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.5); display:none; max-width:80%; text-align:center;
+  }
+
+  .gpsDot{width:16px;height:16px;border-radius:50%;background:#3aa0ff;border:3px solid white;box-shadow:0 0 0 2px rgba(58,160,255,.4);}
+  .gpsHeadingGroup{opacity:0; transition:opacity .3s;}
+
+  #recordBtn.recording{background:#ff3b3b; color:#fff; border-color:#ff3b3b; animation:recPulse 1.4s infinite;}
+  @keyframes recPulse{0%{box-shadow:0 0 0 0 rgba(255,59,59,.6);}70%{box-shadow:0 0 0 10px rgba(255,59,59,0);}100%{box-shadow:0 0 0 0 rgba(255,59,59,0);}}
+
+  #recordStatsBar{
+    display:none; align-items:center; justify-content:center; gap:10px;
+    background:rgba(255,59,59,.15); border:1px solid #ff3b3b; border-radius:10px;
+    padding:6px 10px; color:#ffd6d6; font-size:12px; font-weight:600;
+  }
+
+  .trackRow{display:flex; align-items:center; gap:8px; padding:6px; border-radius:8px; font-size:12px; color:var(--text);}
+  .trackRow input{accent-color:#ff33cc; flex-shrink:0;}
+  .trackRow .trackInfo{flex:1; overflow:hidden;}
+  .trackRow .trackName{font-size:12px; color:var(--text);}
+  .trackRow .trackMeta{font-size:10px; color:#8a988a;}
+  .trackRow .trackDel{color:#ff5c5c; font-size:16px; padding:2px 6px; flex-shrink:0;}
+  #trackList, #waypointList{max-height:160px; overflow-y:auto;}
+  #trackListEmpty, #waypointListEmpty{font-size:11px; color:#8a988a; padding:4px 6px;}
+
+  #statsRow{display:flex; gap:14px; color:#dfe9df; font-size:12px; padding:0 4px; font-weight:600;}
+  #statsRow b{font-size:14px; color:var(--accent);}
+
+  .wptIcon{font-size:20px; line-height:1; filter:drop-shadow(0 1px 2px rgba(0,0,0,.7));}
+
+  #returnBar{
+    display:none; align-items:center; justify-content:center; gap:8px;
+    background:rgba(0,229,255,.15); border:1px solid #00e5ff; border-radius:10px;
+    padding:6px 10px; color:#c9f6ff; font-size:12px; font-weight:600;
+  }
+  #returnArrow{display:inline-block; font-size:16px; transition:transform .3s;}
+  #returnCloseBtn{margin-left:4px; color:#c9f6ff; font-size:14px; padding:0 4px;}
+
+  #routeBar{
+    display:none; align-items:center; justify-content:center; gap:8px;
+    border-radius:10px; padding:6px 10px; font-size:12px; font-weight:600;
+    background:rgba(124,217,87,.15); border:1px solid var(--accent); color:#d8ffd0;
+  }
+  #routeBar.offroute{background:rgba(255,59,59,.18); border-color:#ff3b3b; color:#ffd6d6;}
+  #routeCloseBtn{margin-left:4px; font-size:14px; padding:0 4px;}
+
+  .trackRow .trackIcon{color:#8a988a; font-size:14px; padding:2px 4px; flex-shrink:0;}
+  .trackRow .trackIcon.active{color:var(--accent);}
+
+  .miniBtn{
+    display:block; width:100%; text-align:left; background:none; border:1px solid #3a4a3a;
+    color:var(--text); font:inherit; font-size:12px; padding:8px; border-radius:8px; margin-bottom:6px; cursor:pointer;
+  }
+  .miniBtn.active{background:var(--accent); color:#0c0e0c; border-color:var(--accent); font-weight:600;}
+  .photoThumb{width:100%; border-radius:8px; margin-bottom:6px; max-height:120px; object-fit:cover;}
+
+  #navBtn.picking{background:#b388ff; color:#1b0f2e; border-color:#b388ff; animation:recPulse 1.4s infinite;}
+  #navBar{
+    display:none; align-items:center; justify-content:center; gap:8px;
+    background:rgba(179,136,255,.18); border:1px solid #b388ff; border-radius:10px;
+    padding:6px 10px; color:#ecdcff; font-size:12px; font-weight:600;
+  }
+  #navArrow{display:inline-block; font-size:16px; transition:transform .3s;}
+  #navCloseBtn{margin-left:4px; font-size:14px; padding:0 4px;}
+  #navVoiceBtn{font-size:16px; padding:0 4px; cursor:pointer;}
+  #navBar.turnMode{ justify-content:flex-start; padding:8px 12px; background:#241a3d; border-color:#7c4dff; box-shadow:0 2px 10px rgba(0,0,0,.35); }
+  #navBar.turnMode #navArrow{ font-size:30px; line-height:1; min-width:34px; text-align:center; transform:none !important; }
+  #navBar.turnMode #navText{ flex:1; display:flex; flex-direction:column; gap:2px; }
+  #navMain{ font-size:15px; font-weight:700; color:#fff; }
+  #navSub{ font-size:11px; font-weight:500; color:#d8c8f5; }
+  .destIcon{font-size:24px; line-height:1; filter:drop-shadow(0 1px 2px rgba(0,0,0,.7));}
+  /* Vector map: hide hairline seams between canvas tiles when the map is rotated */
+  .vector-base canvas.leaflet-tile{ width:257px !important; height:257px !important; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="topbar">
+  <div id="searchBox">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8a988a" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input id="searchInput" placeholder="Търси място / град..." />
+  </div>
+  <button class="iconBtn" id="wakeBtn" title="Не изключвай екрана">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+  </button>
+  <button class="iconBtn" id="layerToggleBtn" title="Слоеве">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+  </button>
+</div>
+
+<div id="searchResults"></div>
+
+<div id="layerPanel">
+  <h4>ПОДЛОЖКА</h4>
+  <label class="layerOpt" data-base="sat"><input type="radio" name="base" checked> 🛰️ Сателит</label>
+  <label class="layerOpt" data-base="vector"><input type="radio" name="base"> 🧭 Офроуд карта</label>
+  <label class="layerOpt" data-base="topo"><input type="radio" name="base"> ⛰️ Топо / Пътеки</label>
+  <label class="layerOpt" data-base="street"><input type="radio" name="base"> 🗺️ Улици</label>
+  <hr class="sep">
+  <h4>СЛОЕВЕ</h4>
+  <label class="layerOpt" data-overlay="roads"><input type="checkbox" checked> Пътна мрежа (етикети)</label>
+  <label class="layerOpt" data-overlay="trails"><input type="checkbox"> Черни пътища / трасета (OSM)</label>
+  <hr class="sep">
+  <h4>ОФЛАЙН</h4>
+  <button id="mapDownloadBtn" class="layerOpt" style="width:100%; border:1px solid #3a4a3a; cursor:pointer; background:none; font:inherit; text-align:left; margin-bottom:4px;">
+    ⬇️ Свали офроуд картата на България
+  </button>
+  <div id="mapStatus" style="font-size:11px; color:#8a988a; padding:2px 6px 6px;">Проверка...</div>
+  <button id="mapDeleteBtn" class="miniBtn" style="display:none; margin-bottom:8px;">🗑️ Изтрий офлайн картата</button>
+  <button id="downloadAreaBtn" class="layerOpt" style="width:100%; border:1px solid #3a4a3a; cursor:pointer; background:none; font:inherit; text-align:left;">
+    ⬇️ Свали този район офлайн
+  </button>
+  <div id="offlineStatus" style="font-size:11px; color:#8a988a; padding:4px 6px;">Няма запазени райони</div>
+  <hr class="sep">
+  <h4>МАРШРУТ</h4>
+  <button id="importGpxBtn" class="miniBtn">📂 Импортирай GPX</button>
+  <input type="file" id="gpxFileInput" accept=".gpx" style="display:none;">
+  <div id="routeStatus" style="font-size:11px; color:#8a988a; padding:4px 6px;">Няма зареден маршрут</div>
+  <button id="followRouteBtn" class="miniBtn">🧭 Следвай маршрута</button>
+  <hr class="sep">
+  <h4>МОИТЕ ТРАСЕТА</h4>
+  <button id="exportAllBtn" class="miniBtn">⬇️ Експортирай всичко (GPX)</button>
+  <div id="trackList"></div>
+  <div id="trackListEmpty">Все още няма записани трасета</div>
+  <hr class="sep">
+  <h4>МАРКЕРИ</h4>
+  <div id="waypointList"></div>
+  <div id="waypointListEmpty">Няма добавени маркери</div>
+</div>
+
+<div id="legend">
+  <h4>ЛЕГЕНДА</h4>
+  <div class="legendRow"><span class="legendSwatch" style="background:#3ddc3d"></span>Черен път / проходим</div>
+  <div class="legendRow"><span class="legendSwatch" style="background:#ffb020"></span>Пътека / ограничен достъп</div>
+  <div class="legendRow"><span class="legendSwatch" style="background:#ff4d4d"></span>Частен / забранен</div>
+  <div class="legendRow"><span class="legendSwatch" style="background:#7a7a7a"></span>Асфалт / общ път</div>
+  <div class="legendRow"><span class="legendSwatch" style="background:#ff33cc"></span>Моето трасе (записано)</div>
+  <div class="legendRow"><span class="legendSwatch" style="background:#00e5ff"></span>Път назад (връщане)</div>
+  <div class="legendRow"><span class="legendSwatch" style="background:#3aa0ff"></span>Планиран маршрут</div>
+  <div class="legendRow"><span class="legendSwatch" style="background:#b388ff"></span>Навигация до цел</div>
+</div>
+
+<div id="toast"></div>
+
+<div id="rightControls">
+  <button class="iconBtn" id="compassResetBtn" title="Ориентирай на север">
+    <svg width="22" height="22" viewBox="0 0 24 24">
+      <g class="compassArrowGroup">
+        <polygon points="12 2 15 12 12 10 9 12" fill="#ff5c5c"/>
+        <polygon points="12 22 9 12 12 14 15 12" fill="#cfd8cf"/>
+      </g>
+    </svg>
+  </button>
+  <button class="iconBtn" id="navBtn" title="Навигирай до точка">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>
+  </button>
+  <button class="iconBtn" id="addWaypointBtn" title="Добави маркер тук">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
+  </button>
+  <button class="iconBtn" id="returnBtn" title="Прибери ме (път назад)">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+  </button>
+  <button class="iconBtn" id="recordBtn" title="Записвай трасе">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>
+  </button>
+  <button class="iconBtn" id="myLocationBtn" title="Моето местоположение">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
+  </button>
+</div>
+
+<div id="bottombar">
+  <div id="navBar">
+    <span id="navArrow">↑</span>
+    <span id="navText">До целта: -- км</span>
+    <span id="navVoiceBtn" title="Гласови указания">🔊</span>
+    <span id="navCloseBtn">✕</span>
+  </div>
+  <div id="routeBar">
+    <span id="routeStatusText">🧭 На маршрута</span>
+    <span id="routeCloseBtn">✕</span>
+  </div>
+  <div id="returnBar">
+    <span id="returnArrow">↑</span>
+    <span id="returnText">До старта: -- км</span>
+    <span id="returnCloseBtn">✕</span>
+  </div>
+  <div id="recordStatsBar">
+    <span id="recordStatsText">🔴 REC</span>
+  </div>
+  <div id="statsRow">
+    <span>🏍️ <b id="speedValue">0</b> км/ч</span>
+    <span>⛰️ <b id="altValue">--</b> м</span>
+  </div>
+  <div id="coordsBar">
+    <span id="coordsText">GPS: изчаква...</span>
+    <span id="zoomText">Z: -</span>
+  </div>
+  <div id="actionRow">
+    <button class="bigBtn" id="followBtn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 L12 22 M2 12 L22 12"/></svg>
+      Следвай ме
+    </button>
+    <button class="bigBtn" id="loadTrailsBtn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19 L10 6 L14 14 L17 9 L20 19"/></svg>
+      Зареди трасета
+    </button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
+<script src="vendor/pmtiles.js"></script>
+<script src="vendor/protomaps-leaflet.js"></script>
+<script src="router.js"></script>
+<script>
+// ---------- Storage: IndexedDB (no 5 MB localStorage limit for tracks & photos) ----------
+var OffroadDB = (function(){
+  var dbPromise = null;
+  function open(){
+    if(dbPromise) return dbPromise;
+    dbPromise = new Promise(function(resolve, reject){
+      if(!('indexedDB' in window)){ reject(new Error('no indexedDB')); return; }
+      var req = indexedDB.open('offroad', 1);
+      req.onupgradeneeded = function(){ req.result.createObjectStore('kv'); };
+      req.onsuccess = function(){ resolve(req.result); };
+      req.onerror = function(){ reject(req.error); };
+    });
+    return dbPromise;
+  }
+  function tx(mode, fn){
+    return open().then(function(db){
+      return new Promise(function(resolve, reject){
+        var t = db.transaction('kv', mode);
+        var result = fn(t.objectStore('kv'));
+        t.oncomplete = function(){ resolve(result && 'result' in result ? result.result : undefined); };
+        t.onerror = t.onabort = function(){ reject(t.error); };
+      });
+    });
+  }
+  return {
+    get: function(key){ return tx('readonly', function(st){ return st.get(key); }); },
+    set: function(key, value){ return tx('readwrite', function(st){ st.put(value, key); }); }
+  };
+})();
+
+// Read tracks/waypoints (migrating old localStorage data once), then start the app.
+(function bootOffroad(){
+  function fromLocal(key){
+    try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch(e){ return null; }
+  }
+  function migrate(idbKey, lsKey, current){
+    if(current !== undefined) return Promise.resolve(current);
+    var legacy = fromLocal(lsKey) || [];
+    return OffroadDB.set(idbKey, legacy).then(function(){
+      try { localStorage.removeItem(lsKey); } catch(e){}
+      return legacy;
+    });
+  }
+  Promise.all([OffroadDB.get('tracks'), OffroadDB.get('waypoints')])
+    .then(function(v){
+      return Promise.all([
+        migrate('tracks', 'offroad_tracks', v[0]),
+        migrate('waypoints', 'offroad_waypoints', v[1])
+      ]);
+    })
+    .then(function(v){ startOffroadApp({ idb:true, tracks:v[0], waypoints:v[1] }); })
+    .catch(function(){
+      // IndexedDB unavailable (e.g. some private modes) — fall back to localStorage
+      startOffroadApp({ idb:false, tracks:fromLocal('offroad_tracks') || [], waypoints:fromLocal('offroad_waypoints') || [] });
+    });
+})();
+
+function startOffroadApp(preload){
+  "use strict";
+
+  // ---------- Offline: register service worker ----------
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('service-worker.js').catch(function(err){
+      console.warn('Service worker registration failed:', err);
+    });
+  }
+
+  // ---------- Connection status ----------
+  window.addEventListener('offline', function(){
+    toast('Няма връзка — картата работи само от свалените райони.', 3500);
+  });
+  window.addEventListener('online', function(){
+    toast('Връзката е възстановена.', 2000);
+  });
+  if(navigator.storage && navigator.storage.persist){
+    navigator.storage.persist().catch(function(){});
+  }
+
+  // ---------- Wake lock: keep the screen on while riding ----------
+  var wakeLock = null, wakeLockEnabled = true;
+  function requestWakeLock(){
+    if(!('wakeLock' in navigator)) return;
+    navigator.wakeLock.request('screen').then(function(lock){ wakeLock = lock; }).catch(function(){});
+  }
+  function releaseWakeLockManual(){
+    if(wakeLock){ wakeLock.release().catch(function(){}); wakeLock = null; }
+  }
+  document.addEventListener('visibilitychange', function(){
+    if(wakeLockEnabled && document.visibilityState === 'visible'){ requestWakeLock(); }
+  });
+  document.addEventListener('touchstart', function firstTouch(){
+    if(wakeLockEnabled) requestWakeLock();
+  }, {once:true});
+  requestWakeLock();
+
+  // ---------- Map init ----------
+  var map = L.map('map', {
+    zoomControl:false,
+    attributionControl:true,
+    minZoom:4,
+    maxZoom:19,
+    worldCopyJump:true,
+    rotate:true,        // let the user rotate the map with a two-finger touch gesture
+    touchRotate:true,
+    rotateControl:false, // we build our own reset-to-north button instead of the plugin's
+    bearing:0
+  }).setView([42.7, 25.3], 7); // Bulgaria default, GPS will recenter
+
+  // ---------- Base layers (no API key needed) ----------
+  var satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom:19, attribution:'Esri World Imagery'
+  });
+  // Note: fixed single subdomain (not {s}/abc round-robin) so tile URLs are
+  // deterministic — required for the offline cache to match requests later.
+  var topoLayer = L.tileLayer('https://a.tile.opentopomap.org/{z}/{x}/{y}.png', {
+    maxZoom:17, attribution:'OpenTopoMap (CC-BY-SA), OSM'
+  });
+  var streetLayer = L.tileLayer('https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom:19, attribution:'OpenStreetMap contributors'
+  });
+
+  // Transparent road/label overlay over satellite (Esri, free, no key)
+  var roadsOverlay = L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom:19, attribution:'Esri Transportation'
+  });
+
+  satLayer.addTo(map);
+  roadsOverlay.addTo(map);
+
+  var currentBase = 'sat';
+  function setBase(name){
+    [satLayer, topoLayer, streetLayer, vectorLayer].forEach(function(l){ if(l && map.hasLayer(l)) map.removeLayer(l); });
+    if(name==='vector'){
+      getVectorLayer().addTo(map);
+      if(!mapIsLocal && !navigator.onLine) toast('Офроуд картата не е свалена, а няма връзка. Свали я от панела „Офлайн“.', 4000);
+    }
+    if(name==='sat') satLayer.addTo(map);
+    if(name==='topo') topoLayer.addTo(map);
+    if(name==='street') streetLayer.addTo(map);
+    // keep roads overlay above base, re-add to fix z-order
+    // The Esri road labels belong to the raster maps; the vector map draws its own roads
+    var roadsWanted = document.querySelector('[data-overlay="roads"] input').checked;
+    if(map.hasLayer(roadsOverlay)) map.removeLayer(roadsOverlay);
+    if(roadsWanted && name !== 'vector') roadsOverlay.addTo(map);
+    if(map.hasLayer(trailsLayerGroup)){ map.removeLayer(trailsLayerGroup); trailsLayerGroup.addTo(map); }
+    currentBase = name;
+  }
+
+
+  // ---------- Offline data: vector map + routing graph of Bulgaria ----------
+  // Both files are built from OpenStreetMap by .github/workflows/build-map.yml and published
+  // next to index.html. They can be downloaded once into the phone's storage for offline use.
+  var DATA_FILES = {
+    map:     { name: 'bulgaria.pmtiles',     metaKey: 'mapMeta',     blobKey: 'mapBlob',     label: 'картата' },
+    routing: { name: 'bulgaria-routing.bin', metaKey: 'routingMeta', blobKey: 'routingBlob', label: 'навигацията' }
+  };
+  var MAP_FILE = DATA_FILES.map.name;
+  var mapSource = null;          // pmtiles.PMTiles instance in use
+  var mapIsLocal = false;        // true when reading from the downloaded copy
+  var vectorLayer = null;
+  var dataDownloading = false;
+  var localMeta = { map: null, routing: null };   // {etag, size, savedAt, store}
+  var localFiles = { map: null, routing: null };  // File/Blob of the downloaded copies
+  var remoteInfo = { map: null, routing: null };  // {size, etag} | {missing:true} | null
+
+  // pmtiles "Source" that reads byte ranges from a File/Blob in local storage
+  function BlobSource(blob, key){ this.blob = blob; this.key = key; }
+  BlobSource.prototype.getKey = function(){ return this.key; };
+  BlobSource.prototype.getBytes = function(offset, length){
+    return this.blob.slice(offset, offset + length).arrayBuffer().then(function(buf){ return { data: buf }; });
+  };
+
+  // --- Storage: Origin Private File System when available, IndexedDB Blob otherwise ---
+  var hasOPFS = !!(navigator.storage && navigator.storage.getDirectory);
+  function opfsDir(){ return navigator.storage.getDirectory(); }
+
+  function loadStoredFile(kind){
+    var spec = DATA_FILES[kind];
+    return OffroadDB.get(spec.metaKey).catch(function(){ return null; }).then(function(meta){
+      if(!meta || !meta.size) return null;
+      var read = (hasOPFS && meta.store === 'opfs')
+        ? opfsDir().then(function(d){ return d.getFileHandle(spec.name); }).then(function(h){ return h.getFile(); })
+        : OffroadDB.get(spec.blobKey);
+      return read.then(function(file){
+        // A size mismatch means an interrupted download — ignore the partial file
+        if(file && file.size === meta.size){ localMeta[kind] = meta; localFiles[kind] = file; return file; }
+        return null;
+      }).catch(function(){ return null; });
+    });
+  }
+
+  function deleteStoredFile(kind){
+    var spec = DATA_FILES[kind];
+    localMeta[kind] = null; localFiles[kind] = null;
+    var jobs = [OffroadDB.set(spec.metaKey, null), OffroadDB.set(spec.blobKey, null)];
+    if(hasOPFS) jobs.push(opfsDir().then(function(d){ return d.removeEntry(spec.name); }).catch(function(){}));
+    return Promise.all(jobs).catch(function(){});
+  }
+
+  // Streams a response body to storage, reporting progress. Resolves with {file, store}.
+  function writeToStorage(kind, body, onProgress){
+    var spec = DATA_FILES[kind], got = 0;
+    function pump(reader, onChunk){
+      return reader.read().then(function(r){
+        if(r.done) return;
+        got += r.value.byteLength;
+        return Promise.resolve(onChunk(r.value)).then(function(){ onProgress(got); return pump(reader, onChunk); });
+      });
+    }
+    var opfsWritable = hasOPFS
+      ? opfsDir().then(function(d){ return d.getFileHandle(spec.name, { create: true }); })
+          .then(function(h){
+            if(!h.createWritable) throw new Error('no createWritable');
+            return h.createWritable().then(function(w){ return { handle: h, writer: w }; });
+          })
+      : Promise.reject(new Error('no OPFS'));
+    return opfsWritable.then(function(o){
+      // Streamed straight to disk — the whole file never sits in memory
+      return pump(body.getReader(), function(chunk){ return o.writer.write(chunk); })
+        .then(function(){ return o.writer.close(); })
+        .then(function(){ return o.handle.getFile(); })
+        .then(function(file){ return { file: file, store: 'opfs' }; });
+    }, function(){
+      // Fallback (older Safari): collect chunks into a Blob and keep it in IndexedDB
+      var chunks = [];
+      return pump(body.getReader(), function(chunk){ chunks.push(chunk); }).then(function(){
+        var blob = new Blob(chunks, { type: 'application/octet-stream' });
+        chunks = null;
+        return OffroadDB.set(spec.blobKey, blob).then(function(){ return { file: blob, store: 'idb' }; });
+      });
+    });
+  }
+
+  // Downloads one data file into storage. onProgress(gotBytes, totalBytes)
+  function downloadFile(kind, onProgress){
+    var spec = DATA_FILES[kind], etag = '';
+    // Forget the old copy first, so an interrupted download is never mistaken for a full one
+    return OffroadDB.set(spec.metaKey, null).catch(function(){}).then(function(){
+      return fetch(spec.name, { cache: 'no-store' });
+    }).then(function(res){
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      etag = res.headers.get('ETag') || res.headers.get('Last-Modified') || '';
+      var total = +res.headers.get('Content-Length') || 0;
+      return writeToStorage(kind, res.body, function(got){ onProgress(got, total); });
+    }).then(function(r){
+      var meta = { etag: etag, size: r.file.size, savedAt: Date.now(), store: r.store };
+      if(r.store === 'opfs') OffroadDB.set(spec.blobKey, null).catch(function(){});
+      return OffroadDB.set(spec.metaKey, meta).then(function(){
+        localMeta[kind] = meta; localFiles[kind] = r.file;
+        return r.file;
+      });
+    });
+  }
+
+  function checkRemote(kind){
+    if(!navigator.onLine) return Promise.resolve(null);
+    return fetch(DATA_FILES[kind].name, { method: 'HEAD', cache: 'no-store' }).then(function(res){
+      if(res.status === 404) return { missing: true };
+      if(!res.ok) return null;
+      return { size: +res.headers.get('Content-Length') || 0, etag: res.headers.get('ETag') || res.headers.get('Last-Modified') || '' };
+    }).catch(function(){ return null; });
+  }
+  function checkAllRemote(){
+    return Promise.all([checkRemote('map'), checkRemote('routing')]).then(function(r){
+      remoteInfo.map = r[0]; remoteInfo.routing = r[1];
+    });
+  }
+  // Which files need downloading: missing locally, or a newer version on the server
+  function filesToFetch(){
+    return ['map', 'routing'].filter(function(kind){
+      var rem = remoteInfo[kind], loc = localMeta[kind];
+      if(rem && rem.missing) return false;
+      if(!loc) return true;
+      return !!(rem && rem.etag && loc.etag && rem.etag !== loc.etag);
+    });
+  }
+
+  function setMapSource(src, isLocal){
+    mapSource = new pmtiles.PMTiles(src);
+    mapIsLocal = isLocal;
+    if(vectorLayer){
+      var wasOn = map.hasLayer(vectorLayer);
+      if(wasOn) map.removeLayer(vectorLayer);
+      vectorLayer = null;
+      if(wasOn) setBase('vector');
+    }
+  }
+
+  // --- Style: tuned for reading tracks in sunlight ---
+  var P = window.protomapsL;
+  function prop(f, k){ var v = f && f.props ? f.props[k] : undefined; return v == null ? '' : String(v); }
+  function interp(stops){
+    return function(z){
+      if(z <= stops[0][0]) return stops[0][1];
+      for(var i = 1; i < stops.length; i++){
+        if(z <= stops[i][0]){
+          var a = stops[i - 1], b = stops[i], t = (z - a[0]) / (b[0] - a[0]);
+          return a[1] + t * (b[1] - a[1]);
+        }
+      }
+      return stops[stops.length - 1][1];
+    };
+  }
+  // ATV access: an explicit atv=* wins, then motor_vehicle, vehicle, access
+  function atvForbidden(f){
+    var atv = prop(f, 'atv');
+    if(atv === 'yes' || atv === 'designated' || atv === 'permissive') return false;
+    if(atv === 'no' || atv === 'private') return true;
+    var mv = prop(f, 'motor_vehicle') || prop(f, 'vehicle') || prop(f, 'access');
+    return mv === 'no' || mv === 'private';
+  }
+  var GRADE_DASH = { grade1: [], grade2: [9, 3], grade3: [6, 4], grade4: [3, 4], grade5: [1.5, 4] };
+  var LANDCOVER = {
+    forest: '#bcd4a6', wood: '#bcd4a6', scrub: '#d0dcae', grass: '#e0e9c6', farmland: '#efebd0',
+    urban: '#e0dbd4', rock: '#dad5cc', sand: '#f1e6bb', wetland: '#d0e4dc'
+  };
+  var ROAD = {
+    motorway: ['#e07a3f', '#9c4a1c'], trunk: ['#f0a04b', '#a8662a'], primary: ['#f6c25a', '#a8822e'],
+    secondary: ['#f8dd84', '#a89350'], tertiary: ['#ffffff', '#9a9488'], minor: ['#ffffff', '#a8a294']
+  };
+  function roadClass(f){
+    var h = prop(f, 'highway').replace('_link', '');
+    if(h === 'motorway' || h === 'trunk' || h === 'primary' || h === 'secondary' || h === 'tertiary') return h;
+    return 'minor';
+  }
+  function roadWidth(z, f){
+    var c = roadClass(f);
+    if(c === 'motorway' || c === 'trunk') return interp([[6, 1], [10, 2.5], [14, 6], [18, 14]])(z);
+    if(c === 'primary' || c === 'secondary') return interp([[8, 0.8], [11, 2], [14, 5], [18, 12]])(z);
+    if(c === 'tertiary') return interp([[10, 0.8], [13, 2.5], [16, 6], [18, 10]])(z);
+    return prop(f, 'highway') === 'service' ? interp([[14, 0.8], [18, 4]])(z) : interp([[12, 0.6], [14, 2], [18, 8]])(z);
+  }
+
+  var OFFROAD_PAINT = [
+    { dataLayer: 'landcover', symbolizer: new P.PolygonSymbolizer({
+        fill: function(z, f){ return LANDCOVER[prop(f, 'kind')] || '#e6eadb'; } }) },
+    { dataLayer: 'protected', symbolizer: new P.PolygonSymbolizer({
+        fill: '#2e7d32', opacity: 0.07, stroke: '#2e7d32', width: 1 }) },
+    { dataLayer: 'water', symbolizer: new P.PolygonSymbolizer({ fill: '#9cc6e4' }) },
+    { dataLayer: 'waterway', symbolizer: new P.LineSymbolizer({
+        color: '#6fa8d6',
+        width: function(z, f){ return prop(f, 'kind') === 'river' ? interp([[9, 0.8], [13, 2], [18, 6]])(z) : interp([[12, 0.4], [15, 1], [18, 2.5]])(z); },
+        dash: function(z, f){ return prop(f, 'intermittent') === 'yes' ? [4, 3] : []; },
+        dashColor: '#6fa8d6',
+        dashWidth: function(z, f){ return prop(f, 'kind') === 'river' ? interp([[9, 0.8], [13, 2], [18, 6]])(z) : interp([[12, 0.4], [15, 1], [18, 2.5]])(z); } }) },
+    // Road casing, then fill
+    { dataLayer: 'roads', minzoom: 10, symbolizer: new P.LineSymbolizer({
+        color: function(z, f){ return ROAD[roadClass(f)][1]; },
+        width: function(z, f){ return roadWidth(z, f) + 1.5; }, lineCap: 'round', lineJoin: 'round' }) },
+    { dataLayer: 'roads', symbolizer: new P.LineSymbolizer({
+        color: function(z, f){ return ROAD[roadClass(f)][0]; },
+        width: roadWidth, lineCap: 'round', lineJoin: 'round' }) },
+    // Off-road: red halo under ways that are closed to ATVs
+    { dataLayer: 'tracks', filter: function(z, f){ return atvForbidden(f); }, symbolizer: new P.LineSymbolizer({
+        color: '#e53935', opacity: 0.35, width: interp([[11, 3], [14, 6], [18, 12]]), lineCap: 'round' }) },
+    // Paths and bridleways: thin orange dots
+    { dataLayer: 'tracks', filter: function(z, f){ return prop(f, 'highway') !== 'track'; }, symbolizer: new P.LineSymbolizer({
+        dash: [2, 3], dashColor: '#d97a00', dashWidth: interp([[13, 1], [16, 2], [18, 3]]) }) },
+    // Tracks: green, dash pattern by tracktype (solid = grade1 … dotted = grade5)
+    { dataLayer: 'tracks', filter: function(z, f){ return prop(f, 'highway') === 'track'; }, symbolizer: new P.LineSymbolizer({
+        dash: function(z, f){ return GRADE_DASH[prop(f, 'tracktype')] || [6, 3]; },
+        dashColor: function(z, f){ return atvForbidden(f) ? '#b71c1c' : '#2f8f2f'; },
+        dashWidth: interp([[11, 1.2], [14, 2.5], [18, 5]]) }) }
+  ];
+
+  var HALO = { stroke: '#ffffff', width: 2 };
+  function textOpts(extra){ var o = { labelProps: ['name'], fill: '#2b2b2b', stroke: HALO.stroke, width: HALO.width }; for(var k in extra) o[k] = extra[k]; return o; }
+  var POI_COLOR = { peak: '#6d4c41', pass: '#6d4c41', hut: '#c62828', spring: '#1e88e5', fuel: '#455a64',
+                    viewpoint: '#8e24aa', camp: '#2e7d32', ford: '#0277bd', cave: '#5d4037' };
+
+  var OFFROAD_LABELS = [
+    { dataLayer: 'places', symbolizer: new P.CenteredTextSymbolizer(textOpts({
+        font: function(z, f){
+          var k = prop(f, 'kind');
+          return k === 'city' ? '600 16px sans-serif' : k === 'town' ? '600 14px sans-serif' : k === 'village' ? '500 13px sans-serif' : '400 12px sans-serif';
+        } })),
+      sort: function(a, b){ return (b.population || 0) - (a.population || 0); } },
+    { dataLayer: 'poi', filter: function(z, f){ return prop(f, 'kind') === 'peak' || prop(f, 'kind') === 'pass'; },
+      symbolizer: new P.GroupSymbolizer([
+        new P.CircleSymbolizer({ radius: 3, fill: '#6d4c41', stroke: '#ffffff', width: 1 }),
+        new P.OffsetTextSymbolizer(textOpts({ fill: '#4e342e', font: '500 12px sans-serif', offsetX: 6, offsetY: 4 }))
+      ]) },
+    { dataLayer: 'poi', minzoom: 13, filter: function(z, f){ var k = prop(f, 'kind'); return k !== 'peak' && k !== 'pass'; },
+      symbolizer: new P.GroupSymbolizer([
+        new P.CircleSymbolizer({ radius: 4, fill: function(z, f){ return POI_COLOR[prop(f, 'kind')] || '#555'; }, stroke: '#ffffff', width: 1.5 }),
+        new P.OffsetTextSymbolizer(textOpts({ font: '400 11px sans-serif', offsetX: 7, offsetY: 4 }))
+      ]) },
+    { dataLayer: 'roads', minzoom: 14, symbolizer: new P.LineLabelSymbolizer(textOpts({ font: '400 12px sans-serif', fill: '#444' })) },
+    { dataLayer: 'tracks', minzoom: 15, symbolizer: new P.LineLabelSymbolizer(textOpts({ font: 'italic 400 11px sans-serif', fill: '#2f6f2f' })) },
+    { dataLayer: 'waterway', minzoom: 14, symbolizer: new P.LineLabelSymbolizer(textOpts({ font: 'italic 400 11px sans-serif', fill: '#2f6fa0' })) }
+  ];
+
+  function getVectorLayer(){
+    if(!vectorLayer){
+      vectorLayer = P.leafletLayer({
+        url: mapSource,
+        paintRules: OFFROAD_PAINT,
+        labelRules: OFFROAD_LABELS,
+        backgroundColor: '#eef1e6',
+        className: 'vector-base',
+        maxDataZoom: 14,
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      });
+    }
+    return vectorLayer;
+  }
+
+  // --- UI: download / update / delete ---
+  var mapDownloadBtn = document.getElementById('mapDownloadBtn');
+  var mapDeleteBtn = document.getElementById('mapDeleteBtn');
+  var mapStatus = document.getElementById('mapStatus');
+
+  function fmtMb(bytes){ return (bytes / 1048576).toFixed(bytes < 10485760 ? 1 : 0) + ' MB'; }
+  function fmtDate(ts){ return new Date(ts).toLocaleDateString('bg-BG', { day: '2-digit', month: '2-digit', year: 'numeric' }); }
+
+  function refreshMapUi(){
+    if(dataDownloading) return;
+    var hasLocal = !!(localMeta.map || localMeta.routing);
+    mapDeleteBtn.style.display = hasLocal ? 'block' : 'none';
+    var todo = filesToFetch();
+    var sizeTodo = todo.reduce(function(s, k){ return s + ((remoteInfo[k] && remoteInfo[k].size) || 0); }, 0);
+    var sizeTxt = sizeTodo ? ' (' + fmtMb(sizeTodo) + ')' : '';
+
+    if(remoteInfo.map && remoteInfo.map.missing && !localMeta.map){
+      mapDownloadBtn.textContent = '⬇️ Свали офроуд картата на България';
+      mapDownloadBtn.disabled = true;
+      mapStatus.textContent = 'Картата още не е генерирана на сървъра.';
+      return;
+    }
+    if(!todo.length && hasLocal){
+      mapDownloadBtn.textContent = '✅ Картата и навигацията са в телефона';
+      mapDownloadBtn.disabled = true;
+    } else if(!hasLocal){
+      mapDownloadBtn.textContent = '⬇️ Свали картата и навигацията' + sizeTxt;
+      mapDownloadBtn.disabled = !navigator.onLine;
+    } else {
+      var newer = todo.some(function(k){ return !!localMeta[k]; });
+      mapDownloadBtn.textContent = (newer ? '🔄 Обнови офлайн данните' : '⬇️ Свали ' + DATA_FILES[todo[0]].label) + sizeTxt;
+      mapDownloadBtn.disabled = !navigator.onLine;
+    }
+    var parts = [];
+    if(localMeta.map) parts.push('Карта ' + fmtMb(localMeta.map.size) + ', ' + fmtDate(localMeta.map.savedAt));
+    if(localMeta.routing) parts.push('навигация ' + fmtMb(localMeta.routing.size));
+    if(!parts.length) parts.push(navigator.onLine ? 'Без сваляне картата работи само с интернет.' : 'Няма връзка — данните не са свалени.');
+    mapStatus.textContent = parts.join(' · ');
+  }
+
+  function downloadData(kinds){
+    if(dataDownloading) return Promise.resolve(false);
+    if(!navigator.onLine){ toast('Нужна е интернет връзка, за предпочитане Wi-Fi.', 3000); return Promise.resolve(false); }
+    kinds = kinds || filesToFetch();
+    if(!kinds.length) return Promise.resolve(true);
+    dataDownloading = true;
+    mapDownloadBtn.disabled = true;
+    var totalAll = kinds.reduce(function(s, k){ return s + ((remoteInfo[k] && remoteInfo[k].size) || 0); }, 0);
+    var doneBytes = 0;
+    var chain = Promise.resolve();
+    kinds.forEach(function(kind){
+      chain = chain.then(function(){
+        var lastTxt = '';
+        return downloadFile(kind, function(got, total){
+          var all = totalAll || total, cur = doneBytes + got;
+          var txt = '⏳ Сваляне на ' + DATA_FILES[kind].label + '... ' + (all ? Math.min(99, Math.floor(cur * 100 / all)) + '%' : fmtMb(cur));
+          if(txt !== lastTxt){ lastTxt = txt; mapDownloadBtn.textContent = txt; }
+        }).then(function(file){
+          doneBytes += file.size;
+          if(kind === 'map') setMapSource(new BlobSource(file, 'local-' + localMeta.map.savedAt), true);
+          if(kind === 'routing') router = null;    // rebuilt from the new file on next use
+        });
+      });
+    });
+    return chain.then(function(){
+      toast('Готово — картата и навигацията работят без интернет.', 3500);
+      return true;
+    }).catch(function(err){
+      console.warn('Download failed:', err);
+      toast('Свалянето не успя (' + (err && err.name === 'QuotaExceededError' ? 'няма достатъчно памет' : 'прекъсната връзка') + '). Опитай пак.', 4000);
+      return false;
+    }).then(function(ok){
+      dataDownloading = false;
+      return checkAllRemote().then(function(){ refreshMapUi(); return ok; });
+    });
+  }
+
+  mapDownloadBtn.addEventListener('click', function(){ downloadData(); });
+  mapDeleteBtn.addEventListener('click', function(){
+    if(!confirm('Да изтрия ли офлайн картата и навигацията от телефона? Ще трябва да ги свалиш отново, за да работят без интернет.')) return;
+    Promise.all([deleteStoredFile('map'), deleteStoredFile('routing')]).then(function(){
+      router = null;
+      setMapSource(MAP_FILE, false);
+      toast('Офлайн данните са изтрити.', 2500);
+      checkAllRemote().then(refreshMapUi);
+    });
+  });
+
+  // --- Offline router (router.js) ---
+  var router = null, routerLoading = null;
+  // Resolves with a ready OffroadRouter, or null when routing data isn't available
+  function ensureRouter(){
+    if(router) return Promise.resolve(router);
+    if(routerLoading) return routerLoading;
+    routerLoading = (localFiles.routing ? Promise.resolve(localFiles.routing) : loadStoredFile('routing'))
+      .then(function(file){
+        if(file) return file;
+        // Not downloaded yet: fetch it now when online (it's then kept for offline use)
+        if(!navigator.onLine || !window.OffroadRouter) return null;
+        return checkRemote('routing').then(function(rem){
+          remoteInfo.routing = rem;
+          if(!rem || rem.missing) return null;
+          toast('Сваляне на данните за навигация (' + fmtMb(rem.size) + ')...', 3000);
+          return downloadData(['routing']).then(function(ok){ return ok ? localFiles.routing : null; });
+        });
+      })
+      .then(function(file){ return file ? file.arrayBuffer() : null; })
+      .then(function(buf){
+        if(buf) router = new OffroadRouter(buf);
+        return router;
+      })
+      .catch(function(err){ console.warn('Router unavailable:', err); return null; })
+      .then(function(r){ routerLoading = null; return r; });
+    return routerLoading;
+  }
+
+  // Start with the online map, switch to the local copy as soon as it's found
+  setMapSource(MAP_FILE, false);
+  Promise.all([loadStoredFile('map'), loadStoredFile('routing')]).then(function(files){
+    if(files[0]) setMapSource(new BlobSource(files[0], 'local-' + localMeta.map.savedAt), true);
+    refreshMapUi();
+    return checkAllRemote();
+  }).then(refreshMapUi);
+  window.addEventListener('online', function(){ checkAllRemote().then(refreshMapUi); });
+
+  // ---------- Layer panel UI ----------
+  var layerPanel = document.getElementById('layerPanel');
+  var layerToggleBtn = document.getElementById('layerToggleBtn');
+  layerToggleBtn.addEventListener('click', function(){
+    layerPanel.style.display = layerPanel.style.display==='block' ? 'none' : 'block';
+  });
+  document.querySelectorAll('[data-base]').forEach(function(el){
+    el.addEventListener('click', function(){
+      document.querySelectorAll('[data-base]').forEach(function(o){o.classList.remove('active'); o.querySelector('input').checked=false;});
+      el.classList.add('active');
+      el.querySelector('input').checked = true;
+      setBase(el.getAttribute('data-base'));
+    });
+  });
+  document.querySelector('[data-base="sat"]').classList.add('active');
+
+  var wakeBtn = document.getElementById('wakeBtn');
+  wakeBtn.classList.add('active');
+  wakeBtn.addEventListener('click', function(){
+    wakeLockEnabled = !wakeLockEnabled;
+    wakeBtn.classList.toggle('active', wakeLockEnabled);
+    if(wakeLockEnabled){ requestWakeLock(); toast('Екранът ще остане включен', 1500); }
+    else { releaseWakeLockManual(); toast('Екранът може да изгасне при бездействие', 1500); }
+  });
+
+  document.querySelector('[data-overlay="roads"]').addEventListener('click', function(e){
+    var cb = this.querySelector('input');
+    setTimeout(function(){
+      if(cb.checked){ if(currentBase !== 'vector') roadsOverlay.addTo(map); } else { map.removeLayer(roadsOverlay); }
+    },0);
+  });
+  document.querySelector('[data-overlay="trails"]').addEventListener('click', function(){
+    var cb = this.querySelector('input');
+    setTimeout(function(){
+      if(cb.checked){
+        trailsLayerGroup.addTo(map);
+        document.getElementById('legend').style.display = 'block';
+        loadTrails();
+      } else {
+        map.removeLayer(trailsLayerGroup);
+        document.getElementById('legend').style.display = 'none';
+      }
+    },0);
+  });
+
+  // close panel when tapping map (or, in nav-picking mode, use the tap as the destination)
+  map.on('click', function(e){
+    if(navPicking){ handleDestinationPick(e.latlng); return; }
+    layerPanel.style.display='none';
+    document.getElementById('searchResults').style.display='none';
+  });
+
+  // position legend under layer panel area, bottom-left instead to avoid overlap on small screens
+  document.getElementById('legend').style.left = '10px';
+  document.getElementById('legend').style.bottom = '112px';
+
+  // ---------- Map rotation (two-finger touch gesture via leaflet-rotate) ----------
+  var compassResetBtn = document.getElementById('compassResetBtn');
+  var compassArrowGroup = document.querySelector('#compassResetBtn .compassArrowGroup');
+
+  function currentBearing(){ return (typeof map.getBearing === 'function') ? map.getBearing() : 0; }
+
+  function syncCompassUI(){
+    var bearing = currentBearing();
+    if(compassArrowGroup) compassArrowGroup.setAttribute('transform', 'rotate(' + (-bearing) + ' 12 12)');
+    renderHeadingArrow(); // keep the GPS heading arrow correct relative to true north
+  }
+
+  compassResetBtn.addEventListener('click', function(){
+    if(typeof map.setBearing === 'function') map.setBearing(0);
+    syncCompassUI();
+  });
+
+  map.on('move', syncCompassUI);
+  map.on('rotate', syncCompassUI);
+
+  // ---------- Toast ----------
+  var toastTimer;
+  function toast(msg, ms){
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ t.style.display='none'; }, ms||2500);
+  }
+
+  // ---------- GPS ----------
+  var gpsMarker = null, gpsAccuracyCircle = null, followMode = false, watchId = null, lastLatLng = null, lastSpeedKmh = null;
+
+  function ensureGpsMarker(latlng, accuracy){
+    if(!gpsMarker){
+      var html = '<svg width="40" height="40" viewBox="0 0 40 40">' +
+        '<g class="gpsHeadingGroup"><path d="M20,4 L27,22 L20,17 L13,22 Z" fill="#3aa0ff"/></g>' +
+        '<circle cx="20" cy="20" r="8" fill="#3aa0ff" stroke="white" stroke-width="3"/>' +
+        '</svg>';
+      var icon = L.divIcon({className:'', html:html, iconSize:[40,40], iconAnchor:[20,20]});
+      gpsMarker = L.marker(latlng, {icon:icon, zIndexOffset:1000}).addTo(map);
+      gpsAccuracyCircle = L.circle(latlng, {radius:accuracy||20, color:'#3aa0ff', weight:1, fillColor:'#3aa0ff', fillOpacity:0.15}).addTo(map);
+    } else {
+      gpsMarker.setLatLng(latlng);
+      gpsAccuracyCircle.setLatLng(latlng);
+      gpsAccuracyCircle.setRadius(accuracy||20);
+    }
+  }
+
+  // ---------- Heading: phone compass (with GPS movement heading as fallback) ----------
+  var headingSource = 'none';
+
+  var lastHeadingDeg = null;
+
+  function applyHeading(deg){
+    lastHeadingDeg = deg;
+    renderHeadingArrow();
+  }
+
+  // Draws the GPS marker's arrow at its true compass heading, compensating for
+  // however much the user has manually rotated the map itself.
+  function renderHeadingArrow(){
+    if(lastHeadingDeg == null || !gpsMarker) return;
+    var el = gpsMarker.getElement();
+    if(!el) return;
+    var g = el.querySelector('.gpsHeadingGroup');
+    if(!g) return;
+    g.style.opacity = '1';
+    g.setAttribute('transform', 'rotate(' + (lastHeadingDeg - currentBearing()) + ' 20 20)');
+  }
+
+  function onDeviceOrientation(e){
+    var heading = null;
+    if(e.webkitCompassHeading != null){ heading = e.webkitCompassHeading; } // iOS Safari
+    else if(e.absolute && e.alpha != null){ heading = (360 - e.alpha) % 360; } // Android Chrome (best-effort)
+    if(heading != null && !isNaN(heading)){
+      headingSource = 'compass';
+      applyHeading(heading);
+    }
+  }
+
+  function requestCompassPermission(){
+    if(typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
+      DeviceOrientationEvent.requestPermission().then(function(state){
+        if(state === 'granted'){ window.addEventListener('deviceorientation', onDeviceOrientation); }
+      }).catch(function(){});
+    } else if('ondeviceorientationabsolute' in window){
+      window.addEventListener('deviceorientationabsolute', onDeviceOrientation);
+    } else if('DeviceOrientationEvent' in window){
+      window.addEventListener('deviceorientation', onDeviceOrientation);
+    }
+  }
+  document.addEventListener('touchstart', function firstTouchCompass(){
+    requestCompassPermission();
+  }, {once:true});
+
+  function fmtCoord(v){ return v.toFixed(5); }
+
+  var speedEl = document.getElementById('speedValue');
+  var altEl = document.getElementById('altValue');
+
+  function onGpsUpdate(pos){
+    var latlng = [pos.coords.latitude, pos.coords.longitude];
+    lastLatLng = latlng;
+    ensureGpsMarker(latlng, pos.coords.accuracy);
+    document.getElementById('coordsText').textContent =
+      'GPS: ' + fmtCoord(latlng[0]) + ', ' + fmtCoord(latlng[1]) + ' (±' + Math.round(pos.coords.accuracy) + 'м)';
+    if(followMode){ map.setView(latlng, Math.max(map.getZoom(), 15)); }
+
+    var speedKmh = (pos.coords.speed != null && !isNaN(pos.coords.speed)) ? Math.round(pos.coords.speed * 3.6) : null;
+    speedEl.textContent = speedKmh != null ? speedKmh : '--';
+    lastSpeedKmh = speedKmh;
+    var alt = pos.coords.altitude != null ? Math.round(pos.coords.altitude) : null;
+    altEl.textContent = alt != null ? alt : '--';
+
+    // Fall back to GPS movement heading if the phone's compass isn't available/granted.
+    if(headingSource !== 'compass' && pos.coords.heading != null && !isNaN(pos.coords.heading)){
+      applyHeading(pos.coords.heading);
+    }
+
+    if(recording){
+      if(recordPoints.length === 0 || haversine(recordPoints[recordPoints.length - 1], latlng) > 5){
+        recordPoints.push(latlng);
+        recordMeta.push({alt: pos.coords.altitude, speed: speedKmh, ts: pos.timestamp || Date.now()});
+        if(recordLine) recordLine.setLatLngs(recordPoints);
+      }
+    }
+    if(returnActive){ updateReturnStats(); }
+    if(routeFollowing){ updateRouteFollowing(latlng); }
+    if(navActive){ updateNavStats(); }
+  }
+
+  function onGpsError(err){
+    toast('GPS грешка: ' + err.message, 3000);
+    document.getElementById('coordsText').textContent = 'GPS: недостъпен';
+  }
+
+  function startGps(){
+    if(!navigator.geolocation){ toast('Геолокацията не се поддържа на това устройство.'); return; }
+    watchId = navigator.geolocation.watchPosition(onGpsUpdate, onGpsError, {
+      enableHighAccuracy:true, maximumAge:2000, timeout:15000
+    });
+  }
+  startGps();
+
+  document.getElementById('myLocationBtn').addEventListener('click', function(){
+    if(lastLatLng){ map.setView(lastLatLng, Math.max(map.getZoom(),15)); }
+    else { toast('Търсене на GPS сигнал...'); }
+  });
+
+  var followBtn = document.getElementById('followBtn');
+  followBtn.addEventListener('click', function(){
+    followMode = !followMode;
+    followBtn.classList.toggle('on', followMode);
+    if(followMode && lastLatLng){ map.setView(lastLatLng, Math.max(map.getZoom(),15)); }
+    toast(followMode ? 'Следене включено' : 'Следене изключено', 1500);
+  });
+
+  // If the user manually drags the map (e.g. to browse trails elsewhere), stop
+  // auto-following their GPS position so it doesn't keep snapping back.
+  map.on('dragstart', function(){
+    if(followMode){
+      followMode = false;
+      followBtn.classList.remove('on');
+      toast('Следенето е спряно (местиш картата ръчно)', 2000);
+    }
+  });
+
+  map.on('zoomend', function(){
+    document.getElementById('zoomText').textContent = 'Z: ' + map.getZoom();
+  });
+  document.getElementById('zoomText').textContent = 'Z: ' + map.getZoom();
+
+  // ---------- Trails / access overlay via Overpass API ----------
+  var trailsLayerGroup = L.layerGroup();
+
+  function classify(tags){
+    tags = tags || {};
+    var access = (tags.access||'').toLowerCase();
+    var hwy = (tags.highway||'').toLowerCase();
+    var vehicle = (tags['motor_vehicle']||tags['motorcycle']||tags['atv']||'').toLowerCase();
+
+    if(access==='private' || access==='no' || vehicle==='private' || vehicle==='no'){
+      return {color:'#ff4d4d', weight:4, label:'Частен / забранен'};
+    }
+    if(hwy==='track'){
+      return {color:'#3ddc3d', weight:4, label:'Черен път'};
+    }
+    if(hwy==='path' || hwy==='bridleway' || hwy==='footway'){
+      return {color:'#ffb020', weight:3, label:'Пътека (ограничен достъп за МПС)'};
+    }
+    if(hwy==='unclassified' || hwy==='service'){
+      return {color:'#9fd6ff', weight:3, label:'Второстепенен път'};
+    }
+    return {color:'#7a7a7a', weight:2, label:'Път'};
+  }
+
+  // ---------- Shared Overpass helper: tries several public mirrors, retries on 429/504 ----------
+  var OVERPASS_ENDPOINTS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.openstreetmap.fr/api/interpreter'
+  ];
+
+  function overpassFetch(query){
+    function tryEndpoint(i){
+      if(i >= OVERPASS_ENDPOINTS.length){
+        return Promise.reject(new Error('Overpass сървърите са претоварени. Опитай след малко.'));
+      }
+      return fetch(OVERPASS_ENDPOINTS[i], {method:'POST', body:'data=' + encodeURIComponent(query)})
+        .then(function(r){
+          if(r.status === 429 || r.status === 502 || r.status === 503 || r.status === 504){
+            var e = new Error('busy'); e.retry = true; e.status = r.status;
+            throw e;
+          }
+          if(!r.ok){ throw new Error('HTTP ' + r.status); }
+          return r.json();
+        })
+        .catch(function(err){
+          if(err instanceof TypeError){ err = new Error('няма връзка'); err.retry = true; err.status = 'мрежа'; }
+          if(err && err.retry && i < OVERPASS_ENDPOINTS.length - 1){
+            return tryEndpoint(i + 1);
+          }
+          if(err && err.retry){
+            throw new Error('сървърите са претоварени (HTTP ' + err.status + '). Опитай след малко.');
+          }
+          throw err;
+        });
+    }
+    return tryEndpoint(0);
+  }
+
+  var loadTrailsBtn = document.getElementById('loadTrailsBtn');
+
+  function loadTrails(){
+    if(loadTrailsBtn.classList.contains('loading')) return; // already in flight
+    var zoom = map.getZoom();
+    if(zoom < 12){
+      toast('Приближи картата (zoom 13+) за да заредиш трасета в тази област.', 3000);
+      return;
+    }
+    var b = map.getBounds();
+    loadTrailsBtn.classList.add('loading');
+    loadTrailsBtn.textContent = '...';
+
+    // The offline map has every track of Bulgaria — use it whenever it's reachable.
+    var useMapData = mapSource && (mapIsLocal || (navigator.onLine && remoteInfo.map && !remoteInfo.map.missing));
+    var source;
+    if(useMapData){
+      toast(mapIsLocal ? 'Зареждане на трасета от офлайн картата...' : 'Зареждане на трасета от картата...', 1500);
+      source = trailsFromMap(b);
+    } else {
+      var bbox = b.getSouth() + ',' + b.getWest() + ',' + b.getNorth() + ',' + b.getEast();
+      var query = '[out:json][timeout:25];(' +
+        'way["highway"~"^(track|path|bridleway|unclassified|service)$"](' + bbox + ');' +
+        ');out body geom;';
+      toast('Зареждане на трасета от OpenStreetMap...', 2000);
+      source = overpassFetch(query);
+    }
+
+    source.then(function(data){
+      trailsLayerGroup.clearLayers();
+      var count = 0;
+      (data.elements||[]).forEach(function(el){
+        if(el.type!=='way' || !el.geometry) return;
+        var latlngs = el.geometry.map(function(g){ return [g.lat, g.lon]; });
+        var style = classify(el.tags);
+        var line = L.polyline(latlngs, {color:style.color, weight:style.weight, opacity:0.9});
+        var tags = el.tags||{};
+        var popupHtml = '<b>' + style.label + '</b><br>' +
+          (tags.name ? ('Име: ' + tags.name + '<br>') : '') +
+          (tags.surface ? ('Настилка: ' + tags.surface + '<br>') : '') +
+          (tags.tracktype ? ('Тип: ' + tags.tracktype + '<br>') : '') +
+          (tags.access ? ('Достъп: ' + tags.access + '<br>') : '') +
+          (tags.smoothness ? ('Проходимост: ' + tags.smoothness) : '');
+        line.bindPopup(popupHtml || style.label);
+        line.addTo(trailsLayerGroup);
+        count++;
+      });
+      loadTrailsBtn.classList.remove('loading');
+      loadTrailsBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19 L10 6 L14 14 L17 9 L20 19"/></svg> Зареди трасета';
+      toast(count + ' трасета заредени', 2500);
+      document.getElementById('legend').style.display = 'block';
+      var trailsCheckbox = document.querySelector('[data-overlay="trails"] input');
+      trailsCheckbox.checked = true;
+      if(!map.hasLayer(trailsLayerGroup)) trailsLayerGroup.addTo(map);
+    }).catch(function(err){
+      loadTrailsBtn.classList.remove('loading');
+      loadTrailsBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19 L10 6 L14 14 L17 9 L20 19"/></svg> Зареди трасета';
+      toast('Грешка при зареждане: ' + err.message, 3500);
+    });
+  }
+  loadTrailsBtn.addEventListener('click', loadTrails);
+
+  // Reads tracks/paths (and minor roads) for the given bounds from the vector map
+  // and returns them in the same shape as an Overpass answer: {elements:[{type, tags, geometry}]}
+  var TRAIL_ROAD_KINDS = { unclassified: 1, service: 1 };
+  function trailsFromMap(bounds){
+    var Z = 14, n = Math.pow(2, Z);
+    var x0 = lon2tile(bounds.getWest(), Z), x1 = lon2tile(bounds.getEast(), Z);
+    var y0 = lat2tile(bounds.getNorth(), Z), y1 = lat2tile(bounds.getSouth(), Z);
+    var count = (x1 - x0 + 1) * (y1 - y0 + 1);
+    if(count > 160) return Promise.reject(new Error('приближи картата малко повече'));
+    var src = new protomapsL.PmtilesSource(mapSource, false), EXT = 4096, jobs = [];
+    function toLatLng(x, y, px, py){
+      var lon = (x + px / EXT) / n * 360 - 180;
+      var lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + py / EXT) / n))) * 180 / Math.PI;
+      return { lat: lat, lon: lon };
+    }
+    for(var x = x0; x <= x1; x++) for(var y = y0; y <= y1; y++) (function(x, y){
+      jobs.push(src.get({ z: Z, x: x, y: y }, EXT).then(function(layers){
+        var out = [];
+        [['tracks', null], ['roads', TRAIL_ROAD_KINDS]].forEach(function(spec){
+          (layers.get(spec[0]) || []).forEach(function(f){
+            if(spec[1] && !spec[1][f.props.highway]) return;
+            f.geom.forEach(function(line){
+              // keep only the part inside this tile, so lines from neighbouring tiles don't overlap
+              var pts = line.filter(function(p){ return p.x >= -64 && p.x <= EXT + 64 && p.y >= -64 && p.y <= EXT + 64; });
+              if(pts.length < 2) return;
+              out.push({ type: 'way', tags: f.props, geometry: pts.map(function(p){ return toLatLng(x, y, p.x, p.y); }) });
+            });
+          });
+        });
+        return out;
+      }));
+    })(x, y);
+    return Promise.all(jobs).then(function(parts){ return { elements: [].concat.apply([], parts) }; });
+  }
+
+  // ---------- Offline area download ----------
+  function lon2tile(lon, z){ return Math.floor((lon + 180) / 360 * Math.pow(2, z)); }
+  function lat2tile(lat, z){
+    var rad = lat * Math.PI / 180;
+    return Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * Math.pow(2, z));
+  }
+
+  function tileUrl(template, z, x, y){
+    return template.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+  }
+
+  function activeTileTemplates(){
+    var templates = [];
+    if(currentBase === 'sat'){
+      templates.push({ url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', maxZoom:19 });
+      if(document.querySelector('[data-overlay="roads"] input').checked){
+        templates.push({ url:'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', maxZoom:19 });
+      }
+    } else if(currentBase === 'topo'){
+      templates.push({ url:'https://a.tile.opentopomap.org/{z}/{x}/{y}.png', maxZoom:17 });
+    } else {
+      templates.push({ url:'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', maxZoom:19 });
+    }
+    return templates;
+  }
+
+  var downloadAreaBtn = document.getElementById('downloadAreaBtn');
+  var offlineStatus = document.getElementById('offlineStatus');
+  var downloading = false;
+
+  function downloadArea(){
+    if(downloading) return;
+    if(!('caches' in window)){ toast('Офлайн кеширане не се поддържа на този браузър.', 3000); return; }
+    if(currentBase === 'vector'){
+      toast('Офроуд картата се сваля цялата наведнъж — с бутона отгоре.', 3500);
+      return;
+    }
+    if(currentBase === 'street'){
+      // tile.openstreetmap.org forbids bulk downloading (OSM Tile Usage Policy)
+      toast('OpenStreetMap не позволява сваляне на цели райони. Превключи на Сателит или Топо.', 4500);
+      return;
+    }
+    var z0 = map.getZoom();
+    if(z0 < 12){ toast('Приближи картата (zoom 13+) преди да свалиш района офлайн.', 3000); return; }
+
+    var b = map.getBounds();
+    var templates = activeTileTemplates();
+    var zoomLevels = [z0, z0 + 1, z0 + 2];
+
+    // Build the full tile list and de-duplicate against maxZoom per template
+    var jobs = [];
+    templates.forEach(function(t){
+      zoomLevels.forEach(function(z){
+        if(z > t.maxZoom) return;
+        var x1 = lon2tile(b.getWest(), z), x2 = lon2tile(b.getEast(), z);
+        var y1 = lat2tile(b.getNorth(), z), y2 = lat2tile(b.getSouth(), z);
+        for(var x = x1; x <= x2; x++){
+          for(var y = y1; y <= y2; y++){
+            jobs.push(tileUrl(t.url, z, x, y));
+          }
+        }
+      });
+    });
+
+    if(jobs.length === 0){ toast('Няма какво да се свали.', 2000); return; }
+    if(jobs.length > 2500){
+      toast('Района е твърде голям (' + jobs.length + ' плочки). Приближи повече и опитай пак.', 4000);
+      return;
+    }
+
+    downloading = true;
+    downloadAreaBtn.textContent = '⏳ Изтегляне... 0/' + jobs.length;
+
+    var done = 0, failed = 0, concurrency = 6, idx = 0, finished = false;
+
+    caches.open('offroad-tiles-v1').then(function(cache){
+      function finalize(){
+        if(finished) return;
+        finished = true;
+        downloading = false;
+        downloadAreaBtn.textContent = '⬇️ Свали този район офлайн';
+        offlineStatus.textContent = 'Запазено: ' + (jobs.length - failed) + ' плочки' + (failed ? (' (' + failed + ' неуспешни)') : '');
+        toast('Районът е свален офлайн (' + (jobs.length - failed) + ' плочки)', 3000);
+        if(navigator.storage && navigator.storage.estimate){
+          navigator.storage.estimate().then(function(est){
+            var usedMb = Math.round((est.usage || 0) / 1048576);
+            var quotaMb = Math.round((est.quota || 0) / 1048576);
+            offlineStatus.textContent += ' · заета памет ' + usedMb + ' / ' + quotaMb + ' MB';
+          }).catch(function(){});
+        }
+      }
+      function next(){
+        if(idx >= jobs.length){
+          if(done === jobs.length) finalize();
+          return;
+        }
+        var url = jobs[idx++];
+        cache.match(url).then(function(hit){
+          if(hit) return; // already downloaded earlier
+          // CORS (not no-cors): the response can be status-checked and isn't
+          // stored as an opaque response, which would eat the storage quota.
+          return fetch(url, { mode:'cors', credentials:'omit' }).then(function(res){
+            if(!res.ok) throw new Error('HTTP ' + res.status);
+            return cache.put(url, res);
+          });
+        }).catch(function(){ failed++; }).then(function(){
+          done++;
+          if(done % 5 === 0 || done === jobs.length){
+            downloadAreaBtn.textContent = '⏳ Изтегляне... ' + done + '/' + jobs.length;
+          }
+          if(done === jobs.length){
+            finalize();
+          } else {
+            next();
+          }
+        });
+      }
+      for(var i = 0; i < concurrency; i++){ next(); }
+    });
+  }
+  downloadAreaBtn.addEventListener('click', downloadArea);
+
+  // ---------- Track recording ----------
+  function haversine(a, b){
+    var R = 6371000;
+    var dLat = (b[0] - a[0]) * Math.PI / 180;
+    var dLon = (b[1] - a[1]) * Math.PI / 180;
+    var lat1 = a[0] * Math.PI / 180, lat2 = b[0] * Math.PI / 180;
+    var h = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  }
+  function trackDistance(points){
+    var d = 0;
+    for(var i = 1; i < points.length; i++){ d += haversine(points[i - 1], points[i]); }
+    return d;
+  }
+  function pad2(n){ return (n < 10 ? '0' : '') + n; }
+  function fmtDuration(ms){
+    var s = Math.floor(ms / 1000);
+    var hh = Math.floor(s / 3600); s %= 3600;
+    var mm = Math.floor(s / 60), ss = s % 60;
+    return (hh > 0 ? hh + ':' : '') + pad2(mm) + ':' + pad2(ss);
+  }
+
+  // Rough ETA: uses current GPS speed if we're actually moving at a sane pace,
+  // otherwise falls back to a typical off-road ATV pace so it's never blank.
+  var ETA_FALLBACK_SPEED_KMH = 15;
+  function estimateEta(distanceM){
+    var speed = (lastSpeedKmh != null && lastSpeedKmh > 2) ? lastSpeedKmh : ETA_FALLBACK_SPEED_KMH;
+    var mins = Math.round((distanceM / 1000) / speed * 60);
+    if(mins < 1) return '<1 мин';
+    if(mins < 60) return '~' + mins + ' мин';
+    var h = Math.floor(mins / 60), m = mins % 60;
+    return '~' + h + 'ч' + (m > 0 ? ' ' + m + 'м' : '');
+  }
+
+  // meta: parallel array of {alt, speed, ts} (any field may be null/undefined)
+  function computeElevation(meta){
+    var gain = 0, loss = 0, last = null, THRESH = 2; // ignore <2m GPS altitude noise
+    (meta || []).forEach(function(m){
+      if(m.alt == null || isNaN(m.alt)) return;
+      if(last != null){
+        var d = m.alt - last;
+        if(d > THRESH) gain += d;
+        else if(d < -THRESH) loss += -d;
+      }
+      last = m.alt;
+    });
+    return {gain: Math.round(gain), loss: Math.round(loss)};
+  }
+  function computeSpeedStats(meta, distanceM, durationMs){
+    var max = 0;
+    (meta || []).forEach(function(m){ if(m.speed != null && m.speed > max) max = m.speed; });
+    var avg = (durationMs > 0) ? Math.round((distanceM / 1000) / (durationMs / 3600000)) : 0;
+    return {avg: avg, max: Math.round(max)};
+  }
+
+  function loadSavedTracks(){
+    return Array.isArray(preload.tracks) ? preload.tracks : [];
+  }
+  function persistTracks(){
+    if(preload.idb){
+      OffroadDB.set('tracks', savedTracks).catch(function(){
+        toast('Паметта е пълна — трасето не се запази.', 3000);
+      });
+      return;
+    }
+    try { localStorage.setItem('offroad_tracks', JSON.stringify(savedTracks)); }
+    catch(e){ toast('Паметта е пълна — трасето не се запази.', 3000); }
+  }
+
+  var savedTracks = loadSavedTracks();
+  var savedTracksGroup = L.layerGroup().addTo(map);
+  var savedTrackLayers = {};
+
+  var trackListEl = document.getElementById('trackList');
+  var trackListEmptyEl = document.getElementById('trackListEmpty');
+
+  function trackMetaLine(track){
+    var parts = [(track.distance / 1000).toFixed(1) + ' км'];
+    if(track.elevGain != null) parts.push('⬆' + track.elevGain + 'м ⬇' + track.elevLoss + 'м');
+    if(track.avgSpeed != null) parts.push(track.avgSpeed + ' км/ч ср.');
+    return parts.join(' · ');
+  }
+
+  function renderTrackList(){
+    trackListEl.innerHTML = '';
+    trackListEmptyEl.style.display = savedTracks.length ? 'none' : 'block';
+    savedTracks.slice().reverse().forEach(function(track){
+      var row = document.createElement('div');
+      row.className = 'trackRow';
+
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = true;
+      cb.addEventListener('change', function(){
+        var layer = savedTrackLayers[track.id];
+        if(!layer) return;
+        if(cb.checked){ savedTracksGroup.addLayer(layer); } else { savedTracksGroup.removeLayer(layer); }
+      });
+
+      var info = document.createElement('div');
+      info.className = 'trackInfo';
+      var name = document.createElement('div');
+      name.className = 'trackName';
+      name.textContent = track.name;
+      var meta = document.createElement('div');
+      meta.className = 'trackMeta';
+      meta.textContent = trackMetaLine(track);
+      info.appendChild(name);
+      info.appendChild(meta);
+      info.addEventListener('click', function(){
+        var layer = savedTrackLayers[track.id];
+        if(layer){ map.fitBounds(layer.getBounds(), {padding:[40,40]}); }
+      });
+
+      var routeIcon = document.createElement('span');
+      routeIcon.className = 'trackIcon';
+      routeIcon.textContent = '🧭';
+      routeIcon.title = 'Използвай като маршрут';
+      if(plannedRoute && plannedRoute.id === track.id) routeIcon.classList.add('active');
+      routeIcon.addEventListener('click', function(e){
+        e.stopPropagation();
+        setPlannedRoute(track);
+      });
+
+      var exportIcon = document.createElement('span');
+      exportIcon.className = 'trackIcon';
+      exportIcon.textContent = '⬇';
+      exportIcon.title = 'Изнеси GPX';
+      exportIcon.addEventListener('click', function(e){
+        e.stopPropagation();
+        downloadGpx(buildGpx([track], []), track.name.replace(/[^\w-]+/g, '_') + '.gpx');
+      });
+
+      var del = document.createElement('span');
+      del.className = 'trackDel';
+      del.textContent = '✕';
+      del.addEventListener('click', function(e){
+        e.stopPropagation();
+        savedTracks = savedTracks.filter(function(t){ return t.id !== track.id; });
+        persistTracks();
+        if(savedTrackLayers[track.id]){
+          savedTracksGroup.removeLayer(savedTrackLayers[track.id]);
+          delete savedTrackLayers[track.id];
+        }
+        if(plannedRoute && plannedRoute.id === track.id) clearPlannedRoute();
+        renderTrackList();
+      });
+
+      row.appendChild(cb);
+      row.appendChild(info);
+      row.appendChild(routeIcon);
+      row.appendChild(exportIcon);
+      row.appendChild(del);
+      trackListEl.appendChild(row);
+    });
+  }
+
+  function addTrackToMap(track){
+    var line = L.polyline(track.points, {color:'#ff33cc', weight:4, opacity:0.85});
+    line.bindPopup('<b>' + track.name + '</b><br>' + trackMetaLine(track));
+    savedTrackLayers[track.id] = line;
+    savedTracksGroup.addLayer(line);
+  }
+
+  savedTracks.forEach(addTrackToMap);
+  renderTrackList();
+
+  var recording = false, recordPoints = [], recordMeta = [], recordLine = null, recordStartTime = null, recordTimer = null;
+  var recordBtn = document.getElementById('recordBtn');
+  var recordStatsBar = document.getElementById('recordStatsBar');
+  var recordStatsText = document.getElementById('recordStatsText');
+
+  function updateRecordingStats(){
+    var dist = trackDistance(recordPoints);
+    var elapsed = Date.now() - recordStartTime;
+    recordStatsText.textContent = '🔴 ' + (dist / 1000).toFixed(2) + ' км · ' + fmtDuration(elapsed);
+  }
+
+  function startRecording(){
+    recording = true;
+    recordPoints = lastLatLng ? [lastLatLng] : [];
+    recordMeta = [];
+    recordLine = L.polyline(recordPoints, {color:'#ff33cc', weight:5, opacity:0.95}).addTo(map);
+    recordStartTime = Date.now();
+    recordBtn.classList.add('recording');
+    recordStatsBar.style.display = 'flex';
+    updateRecordingStats();
+    recordTimer = setInterval(updateRecordingStats, 1000);
+    toast('Записът на трасето започна', 1500);
+  }
+
+  function stopRecording(){
+    recording = false;
+    clearInterval(recordTimer);
+    recordBtn.classList.remove('recording');
+    recordStatsBar.style.display = 'none';
+
+    if(recordLine){ map.removeLayer(recordLine); recordLine = null; }
+
+    if(recordPoints.length < 2){
+      toast('Записът е твърде кратък — не е запазен.', 2500);
+      return;
+    }
+    var dist = trackDistance(recordPoints);
+    var duration = Date.now() - recordStartTime;
+    var elev = computeElevation(recordMeta);
+    var speedStats = computeSpeedStats(recordMeta, dist, duration);
+    var track = {
+      id: 't' + Date.now(),
+      name: new Date().toLocaleString('bg-BG', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'}),
+      points: recordPoints,
+      meta: recordMeta,
+      distance: dist,
+      duration: duration,
+      elevGain: elev.gain,
+      elevLoss: elev.loss,
+      avgSpeed: speedStats.avg,
+      maxSpeed: speedStats.max
+    };
+    savedTracks.push(track);
+    persistTracks();
+    addTrackToMap(track);
+    renderTrackList();
+    toast('Трасето е запазено: ' + (dist / 1000).toFixed(1) + ' км', 3000);
+  }
+
+  recordBtn.addEventListener('click', function(){
+    if(recording){ stopRecording(); } else { startRecording(); }
+  });
+
+  // ---------- Waypoints (water crossing, gate, hazard, camp...) ----------
+  var WAYPOINT_TYPES = {
+    water:{icon:'💧', label:'Брод / вода'},
+    gate:{icon:'🚧', label:'Бариера / порта'},
+    hazard:{icon:'⚠️', label:'Опасност / кал'},
+    camp:{icon:'⛺', label:'Лагер'},
+    fuel:{icon:'⛽', label:'Гориво'},
+    other:{icon:'📍', label:'Друго'}
+  };
+
+  function loadWaypoints(){
+    return Array.isArray(preload.waypoints) ? preload.waypoints : [];
+  }
+  function persistWaypoints(){
+    if(preload.idb){
+      OffroadDB.set('waypoints', savedWaypoints).catch(function(){
+        toast('Паметта е пълна — маркерът не се запази.', 3000);
+      });
+      return;
+    }
+    try { localStorage.setItem('offroad_waypoints', JSON.stringify(savedWaypoints)); }
+    catch(e){ toast('Паметта е пълна — маркерът не се запази.', 3000); }
+  }
+
+  var savedWaypoints = loadWaypoints();
+  var waypointsGroup = L.layerGroup().addTo(map);
+  var waypointMarkers = {};
+
+  var waypointListEl = document.getElementById('waypointList');
+  var waypointListEmptyEl = document.getElementById('waypointListEmpty');
+
+  function waypointIcon(type){
+    var t = WAYPOINT_TYPES[type] || WAYPOINT_TYPES.other;
+    return L.divIcon({className:'', html:'<div class="wptIcon">' + t.icon + '</div>', iconSize:[28,28], iconAnchor:[14,26]});
+  }
+
+  function resizePhoto(file, maxDim, quality, callback){
+    var reader = new FileReader();
+    reader.onload = function(e){
+      var img = new Image();
+      img.onload = function(){
+        var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        var w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+        var canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        callback(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = function(){ callback(null); };
+      img.src = e.target.result;
+    };
+    reader.onerror = function(){ callback(null); };
+    reader.readAsDataURL(file);
+  }
+
+  function buildWaypointPopup(wp){
+    var box = document.createElement('div');
+    box.style.minWidth = '170px';
+
+    if(wp.photo){
+      var thumb = document.createElement('img');
+      thumb.className = 'photoThumb';
+      thumb.src = wp.photo;
+      thumb.addEventListener('click', function(){ window.open(wp.photo, '_blank'); });
+      box.appendChild(thumb);
+    }
+
+    var photoInput = document.createElement('input');
+    photoInput.type = 'file';
+    photoInput.accept = 'image/*';
+    photoInput.capture = 'environment';
+    photoInput.style.display = 'none';
+    photoInput.addEventListener('change', function(){
+      var file = photoInput.files[0];
+      if(!file) return;
+      resizePhoto(file, 900, 0.6, function(dataUrl){
+        if(!dataUrl){ toast('Снимката не можа да се обработи.', 2500); return; }
+        wp.photo = dataUrl;
+        persistWaypoints();
+        renderWaypointList();
+        map.closePopup();
+        waypointMarkers[wp.id].bindPopup(buildWaypointPopup(wp));
+        waypointMarkers[wp.id].openPopup();
+      });
+    });
+    box.appendChild(photoInput);
+
+    var photoBtn = document.createElement('button');
+    photoBtn.className = 'miniBtn';
+    photoBtn.textContent = wp.photo ? '📷 Смени снимката' : '📷 Добави снимка';
+    photoBtn.addEventListener('click', function(){ photoInput.click(); });
+    box.appendChild(photoBtn);
+
+    var select = document.createElement('select');
+    select.style.cssText = 'width:100%; margin-bottom:6px; padding:5px; border-radius:6px;';
+    Object.keys(WAYPOINT_TYPES).forEach(function(key){
+      var opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = WAYPOINT_TYPES[key].icon + ' ' + WAYPOINT_TYPES[key].label;
+      if(key === wp.type) opt.selected = true;
+      select.appendChild(opt);
+    });
+    select.addEventListener('change', function(){
+      wp.type = select.value;
+      waypointMarkers[wp.id].setIcon(waypointIcon(wp.type));
+      persistWaypoints();
+      renderWaypointList();
+    });
+
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Бележка...';
+    input.value = wp.note || '';
+    input.style.cssText = 'width:100%; margin-bottom:6px; padding:5px; border-radius:6px; box-sizing:border-box;';
+    input.addEventListener('change', function(){
+      wp.note = input.value;
+      persistWaypoints();
+      renderWaypointList();
+    });
+
+    var delBtn = document.createElement('button');
+    delBtn.textContent = '🗑 Изтрий маркера';
+    delBtn.style.cssText = 'width:100%; padding:7px; border-radius:6px; border:none; background:#ff4d4d; color:#fff; font-weight:600;';
+    delBtn.addEventListener('click', function(){
+      map.closePopup();
+      waypointsGroup.removeLayer(waypointMarkers[wp.id]);
+      delete waypointMarkers[wp.id];
+      savedWaypoints = savedWaypoints.filter(function(w){ return w.id !== wp.id; });
+      persistWaypoints();
+      renderWaypointList();
+    });
+
+    box.appendChild(select);
+    box.appendChild(input);
+    box.appendChild(delBtn);
+    return box;
+  }
+
+  function addWaypointToMap(wp){
+    var marker = L.marker(wp.latlng, {icon: waypointIcon(wp.type)});
+    marker.bindPopup(buildWaypointPopup(wp));
+    marker.addTo(waypointsGroup);
+    waypointMarkers[wp.id] = marker;
+  }
+
+  function renderWaypointList(){
+    waypointListEl.innerHTML = '';
+    waypointListEmptyEl.style.display = savedWaypoints.length ? 'none' : 'block';
+    savedWaypoints.slice().reverse().forEach(function(wp){
+      var t = WAYPOINT_TYPES[wp.type] || WAYPOINT_TYPES.other;
+      var row = document.createElement('div');
+      row.className = 'trackRow';
+
+      var info = document.createElement('div');
+      info.className = 'trackInfo';
+      info.style.cursor = 'pointer';
+      var name = document.createElement('div');
+      name.className = 'trackName';
+      name.textContent = t.icon + ' ' + (wp.note || t.label) + (wp.photo ? ' 📷' : '');
+      var meta = document.createElement('div');
+      meta.className = 'trackMeta';
+      meta.textContent = new Date(wp.ts).toLocaleDateString('bg-BG');
+      info.appendChild(name);
+      info.appendChild(meta);
+      info.addEventListener('click', function(){
+        map.setView(wp.latlng, Math.max(map.getZoom(), 16));
+        waypointMarkers[wp.id].openPopup();
+      });
+
+      var del = document.createElement('span');
+      del.className = 'trackDel';
+      del.textContent = '✕';
+      del.addEventListener('click', function(e){
+        e.stopPropagation();
+        waypointsGroup.removeLayer(waypointMarkers[wp.id]);
+        delete waypointMarkers[wp.id];
+        savedWaypoints = savedWaypoints.filter(function(w){ return w.id !== wp.id; });
+        persistWaypoints();
+        renderWaypointList();
+      });
+
+      row.appendChild(info);
+      row.appendChild(del);
+      waypointListEl.appendChild(row);
+    });
+  }
+
+  savedWaypoints.forEach(addWaypointToMap);
+  renderWaypointList();
+
+  var addWaypointBtn = document.getElementById('addWaypointBtn');
+  addWaypointBtn.addEventListener('click', function(){
+    if(!lastLatLng){ toast('Изчакай GPS сигнал...', 2000); return; }
+    var wp = {id:'w' + Date.now(), latlng:lastLatLng, type:'other', note:'', ts:Date.now()};
+    savedWaypoints.push(wp);
+    persistWaypoints();
+    addWaypointToMap(wp);
+    renderWaypointList();
+    waypointMarkers[wp.id].openPopup();
+    toast('Маркер добавен — избери тип и бележка', 2000);
+  });
+
+  // ---------- Return to start (guide line back along the last track) ----------
+  var returnLine = null, returnActive = false, returnStart = null;
+  var returnBtn = document.getElementById('returnBtn');
+  var returnBar = document.getElementById('returnBar');
+  var returnText = document.getElementById('returnText');
+  var returnArrow = document.getElementById('returnArrow');
+
+  function bearing(a, b){
+    var lat1 = a[0] * Math.PI / 180, lat2 = b[0] * Math.PI / 180;
+    var dLon = (b[1] - a[1]) * Math.PI / 180;
+    var y = Math.sin(dLon) * Math.cos(lat2);
+    var x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+
+  function updateReturnStats(){
+    if(!returnActive || !lastLatLng || !returnStart) return;
+    var dist = haversine(lastLatLng, returnStart);
+    returnText.textContent = 'До старта: ' + (dist < 1000 ? Math.round(dist) + ' м' : (dist / 1000).toFixed(1) + ' км') + ' · ' + estimateEta(dist);
+    returnArrow.style.transform = 'rotate(' + bearing(lastLatLng, returnStart) + 'deg)';
+  }
+
+  function startReturn(){
+    var refPoints = (recording && recordPoints.length > 1) ? recordPoints
+      : (savedTracks.length ? savedTracks[savedTracks.length - 1].points : null);
+    if(!refPoints || refPoints.length < 2){
+      toast('Няма записано трасе, по което да се върнеш назад.', 3000);
+      return;
+    }
+    if(returnLine) map.removeLayer(returnLine);
+    returnLine = L.polyline(refPoints, {color:'#00e5ff', weight:4, opacity:0.9, dashArray:'10,8'}).addTo(map);
+    returnStart = refPoints[0];
+    returnActive = true;
+    returnBtn.classList.add('active');
+    returnBar.style.display = 'flex';
+    updateReturnStats();
+    map.fitBounds(returnLine.getBounds(), {padding:[50,50]});
+    toast('Пътят назад е показан (синя пунктирана линия)', 2500);
+  }
+
+  function stopReturn(){
+    returnActive = false;
+    if(returnLine){ map.removeLayer(returnLine); returnLine = null; }
+    returnBar.style.display = 'none';
+    returnBtn.classList.remove('active');
+  }
+
+  returnBtn.addEventListener('click', function(){
+    if(returnActive){ stopReturn(); } else { startReturn(); }
+  });
+  document.getElementById('returnCloseBtn').addEventListener('click', stopReturn);
+
+  // ---------- GPX export ----------
+  function esc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+  function buildGpx(tracks, waypoints){
+    var xml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<gpx version="1.1" creator="OffRoad Maps" xmlns="http://www.topografix.com/GPX/1/1">\n';
+
+    (waypoints || []).forEach(function(wp){
+      xml += '  <wpt lat="' + wp.latlng[0] + '" lon="' + wp.latlng[1] + '">\n' +
+        '    <name>' + esc(wp.note || wp.type) + '</name>\n' +
+        '  </wpt>\n';
+    });
+
+    (tracks || []).forEach(function(track){
+      xml += '  <trk>\n    <name>' + esc(track.name) + '</name>\n    <trkseg>\n';
+      track.points.forEach(function(p, i){
+        var m = (track.meta && track.meta[i]) || {};
+        xml += '      <trkpt lat="' + p[0] + '" lon="' + p[1] + '">';
+        if(m.alt != null) xml += '<ele>' + m.alt + '</ele>';
+        if(m.ts) xml += '<time>' + new Date(m.ts).toISOString() + '</time>';
+        xml += '</trkpt>\n';
+      });
+      xml += '    </trkseg>\n  </trk>\n';
+    });
+
+    xml += '</gpx>\n';
+    return xml;
+  }
+
+  function downloadGpx(content, filename){
+    var blob = new Blob([content], {type:'application/gpx+xml'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+  }
+
+  document.getElementById('exportAllBtn').addEventListener('click', function(){
+    if(!savedTracks.length && !savedWaypoints.length){ toast('Няма какво да се изнесе.', 2000); return; }
+    downloadGpx(buildGpx(savedTracks, savedWaypoints), 'offroad-export.gpx');
+    toast('GPX файлът е готов за сваляне', 2000);
+  });
+
+  // ---------- GPX import ----------
+  function parseGpx(text, sourceName){
+    var xml = new DOMParser().parseFromString(text, 'application/xml');
+    if(xml.querySelector('parsererror')){ throw new Error('Невалиден GPX файл'); }
+
+    var points = [], meta = [];
+    var ptEls = xml.getElementsByTagName('trkpt');
+    if(!ptEls.length) ptEls = xml.getElementsByTagName('rtept');
+    for(var i = 0; i < ptEls.length; i++){
+      var el = ptEls[i];
+      var lat = parseFloat(el.getAttribute('lat'));
+      var lon = parseFloat(el.getAttribute('lon'));
+      if(isNaN(lat) || isNaN(lon)) continue;
+      points.push([lat, lon]);
+      var eleEl = el.getElementsByTagName('ele')[0];
+      var timeEl = el.getElementsByTagName('time')[0];
+      meta.push({
+        alt: eleEl ? parseFloat(eleEl.textContent) : null,
+        speed: null,
+        ts: timeEl ? Date.parse(timeEl.textContent) : null
+      });
+    }
+
+    var waypoints = [];
+    var wptEls = xml.getElementsByTagName('wpt');
+    for(var j = 0; j < wptEls.length; j++){
+      var w = wptEls[j];
+      var wlat = parseFloat(w.getAttribute('lat'));
+      var wlon = parseFloat(w.getAttribute('lon'));
+      if(isNaN(wlat) || isNaN(wlon)) continue;
+      var nameEl = w.getElementsByTagName('name')[0];
+      waypoints.push({
+        id: 'w' + Date.now() + '_' + j,
+        latlng: [wlat, wlon],
+        type: 'other',
+        note: nameEl ? nameEl.textContent : '',
+        ts: Date.now()
+      });
+    }
+
+    if(!points.length) throw new Error('Файлът не съдържа трасе (trkpt/rtept).');
+
+    var nameEl2 = xml.getElementsByTagName('name')[0];
+    var dist = trackDistance(points);
+    var hasTime = meta.length && meta[0].ts && meta[meta.length - 1].ts;
+    var duration = hasTime ? (meta[meta.length - 1].ts - meta[0].ts) : null;
+    var elev = computeElevation(meta);
+    var speedStats = duration ? computeSpeedStats(meta, dist, duration) : {avg:null, max:null};
+
+    var track = {
+      id: 't' + Date.now(),
+      name: (nameEl2 && nameEl2.textContent) || sourceName || 'Импортиран маршрут',
+      points: points,
+      meta: meta,
+      distance: dist,
+      duration: duration,
+      elevGain: elev.gain,
+      elevLoss: elev.loss,
+      avgSpeed: speedStats.avg,
+      maxSpeed: speedStats.max
+    };
+    return {track: track, waypoints: waypoints};
+  }
+
+  document.getElementById('importGpxBtn').addEventListener('click', function(){
+    document.getElementById('gpxFileInput').click();
+  });
+  document.getElementById('gpxFileInput').addEventListener('change', function(e){
+    var file = e.target.files[0];
+    if(!file) return;
+    var reader = new FileReader();
+    reader.onload = function(){
+      try {
+        var result = parseGpx(reader.result, file.name.replace(/\.gpx$/i, ''));
+        savedTracks.push(result.track);
+        persistTracks();
+        addTrackToMap(result.track);
+        result.waypoints.forEach(function(wp){
+          savedWaypoints.push(wp);
+          addWaypointToMap(wp);
+        });
+        if(result.waypoints.length){ persistWaypoints(); }
+        renderTrackList();
+        renderWaypointList();
+        setPlannedRoute(result.track);
+        toast('Импортирано: ' + (result.track.distance / 1000).toFixed(1) + ' км маршрут' + (result.waypoints.length ? (' + ' + result.waypoints.length + ' маркера') : ''), 3500);
+      } catch(err){
+        toast('Грешка при импорт: ' + err.message, 3500);
+      }
+      e.target.value = '';
+    };
+    reader.readAsText(file);
+  });
+
+  // ---------- Planned route + off-route warning ----------
+  var plannedRoute = null, plannedRouteLine = null, routeFollowing = false;
+  var routeBar = document.getElementById('routeBar');
+  var routeStatusText = document.getElementById('routeStatusText');
+  var routeStatusEl = document.getElementById('routeStatus');
+  var lastOffRouteAlert = 0;
+  var OFF_ROUTE_THRESHOLD = 60; // meters
+
+  function minDistanceToRoute(latlng){
+    if(!plannedRoute) return Infinity;
+    var min = Infinity;
+    for(var i = 0; i < plannedRoute.points.length; i++){
+      var d = haversine(latlng, plannedRoute.points[i]);
+      if(d < min) min = d;
+    }
+    return min;
+  }
+
+  function setPlannedRoute(track, opts){
+    opts = opts || {};
+    plannedRoute = track;
+    if(plannedRouteLine){ map.removeLayer(plannedRouteLine); plannedRouteLine = null; }
+    if(!opts.skipLine){
+      plannedRouteLine = L.polyline(track.points, {color:'#3aa0ff', weight:5, opacity:0.85, dashArray:'2,10'}).addTo(map);
+    }
+    routeStatusEl.textContent = 'Активен: ' + track.name + ' (' + (track.distance / 1000).toFixed(1) + ' км)';
+    renderTrackList();
+    if(!opts.silent){
+      map.fitBounds(L.latLngBounds(track.points), {padding:[50,50]});
+      toast('Маршрутът е зареден. Натисни 🧭 бутона вдясно, за да го следваш активно.', 3500);
+    }
+  }
+
+  function clearPlannedRoute(){
+    plannedRoute = null;
+    if(plannedRouteLine){ map.removeLayer(plannedRouteLine); plannedRouteLine = null; }
+    routeStatusEl.textContent = 'Няма зареден маршрут';
+    stopRouteFollowing();
+    renderTrackList();
+  }
+
+  function startRouteFollowing(){
+    if(!plannedRoute){ toast('Първо избери маршрут (🧭 в списъка с трасета).', 3000); return; }
+    routeFollowing = true;
+    routeBar.style.display = 'flex';
+    routeReturnIconState();
+    if(lastLatLng) updateRouteFollowing(lastLatLng);
+    toast('Следене на маршрута включено', 1500);
+  }
+  function stopRouteFollowing(){
+    routeFollowing = false;
+    routeBar.style.display = 'none';
+    routeReturnIconState();
+  }
+  function routeReturnIconState(){
+    var wpBtn = document.getElementById('followRouteBtn');
+    if(wpBtn){
+      wpBtn.classList.toggle('active', routeFollowing);
+      wpBtn.textContent = routeFollowing ? '⏹ Спри следенето' : '🧭 Следвай маршрута';
+    }
+  }
+
+  function updateRouteFollowing(latlng){
+    var d = minDistanceToRoute(latlng);
+    if(d > OFF_ROUTE_THRESHOLD){
+      routeBar.classList.add('offroute');
+      routeStatusText.textContent = '⚠️ Извън маршрута: ' + Math.round(d) + ' м';
+      if(Date.now() - lastOffRouteAlert > 15000){
+        lastOffRouteAlert = Date.now();
+        toast('⚠️ Отклоняваш се от маршрута (' + Math.round(d) + ' м)', 3000);
+        if(navigator.vibrate) navigator.vibrate([200, 100, 200]);
+      }
+    } else {
+      routeBar.classList.remove('offroute');
+      routeStatusText.textContent = '🧭 На маршрута (±' + Math.round(d) + ' м)';
+    }
+  }
+
+  document.getElementById('routeCloseBtn').addEventListener('click', stopRouteFollowing);
+  document.getElementById('followRouteBtn').addEventListener('click', function(){
+    if(routeFollowing){ stopRouteFollowing(); } else { startRouteFollowing(); }
+  });
+
+  // ---------- Tap-to-navigate: route over the OSM trail/road network ----------
+  var NAV_MAX_STRAIGHT_KM = 20;   // don't try to route further than this
+  var NAV_SNAP_MAX_M = 700;       // how far a point may be from a known way to "snap" onto it
+
+  var navPicking = false, navActive = false, navLine = null, navDestMarker = null, navDest = null;
+  // Turn-by-turn state (offline router)
+  var navRoute = null, navHintIdx = 0, navSpoken = {}, navOffCount = 0, navLastReroute = 0, navRerouting = false;
+  var navVoiceOn = (function(){ try { return localStorage.getItem('offroad_voice') !== 'off'; } catch(e){ return true; } })();
+  var navVoiceBtn = document.getElementById('navVoiceBtn');
+  navVoiceBtn.textContent = navVoiceOn ? '🔊' : '🔇';
+  navVoiceBtn.addEventListener('click', function(e){
+    e.stopPropagation();
+    navVoiceOn = !navVoiceOn;
+    navVoiceBtn.textContent = navVoiceOn ? '🔊' : '🔇';
+    try { localStorage.setItem('offroad_voice', navVoiceOn ? 'on' : 'off'); } catch(err){}
+    if(navVoiceOn) speak('Гласовите указания са включени'); else if(window.speechSynthesis) speechSynthesis.cancel();
+  });
+
+  var bgVoice = null;
+  function pickVoice(){
+    if(!window.speechSynthesis) return;
+    var voices = speechSynthesis.getVoices();
+    bgVoice = voices.filter(function(v){ return /^bg/i.test(v.lang); })[0] || null;
+  }
+  if(window.speechSynthesis){ pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+  function speak(text){
+    if(!navVoiceOn || !window.speechSynthesis) return;
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = 'bg-BG';
+    if(bgVoice) u.voice = bgVoice;
+    u.rate = 1.0;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  }
+  // iOS only allows speech that was first started from a tap — call this inside a tap handler
+  function unlockSpeech(){
+    if(!window.speechSynthesis || unlockSpeech.done) return;
+    unlockSpeech.done = true;
+    var u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    speechSynthesis.speak(u);
+  }
+  function fmtDist(m){
+    if(m < 1000) return (m < 100 ? Math.round(m / 10) * 10 : Math.round(m / 50) * 50) + ' м';
+    return (m / 1000).toFixed(m < 10000 ? 1 : 0).replace('.', ',') + ' км';
+  }
+  function speechDist(m){
+    if(m >= 1000) return (m / 1000).toFixed(1).replace('.0', '').replace('.', ' цяло ') + ' километра';
+    return (Math.round(m / 50) * 50) + ' метра';
+  }
+  function setNavText(main, sub){
+    navText.textContent = '';
+    var a = document.createElement('span'); a.id = 'navMain'; a.textContent = main;
+    var b = document.createElement('span'); b.id = 'navSub'; b.textContent = sub;
+    navText.appendChild(a); navText.appendChild(b);
+  }
+  var navBtn = document.getElementById('navBtn');
+  var navBar = document.getElementById('navBar');
+  var navText = document.getElementById('navText');
+  var navArrow = document.getElementById('navArrow');
+
+  function updateNavStats(){
+    if(!navActive || !lastLatLng || !navDest) return;
+    if(navRoute){ updateTurnByTurn(); return; }
+    var dist = haversine(lastLatLng, navDest);
+    navText.textContent = 'До целта: ' + (dist < 1000 ? Math.round(dist) + ' м' : (dist / 1000).toFixed(1) + ' км') + ' · ' + estimateEta(dist);
+    navArrow.style.transform = 'rotate(' + bearing(lastLatLng, navDest) + 'deg)';
+  }
+
+  function updateTurnByTurn(){
+    var loc = OffroadRouter.locate(navRoute, lastLatLng[0], lastLatLng[1], navHintIdx);
+    navHintIdx = loc.idx;
+    var remaining = Math.max(0, navRoute.distance - loc.along);
+
+    // Off the line: re-route from here after a couple of GPS fixes (works offline)
+    if(loc.off > 50){
+      navOffCount++;
+      if(navOffCount >= 3 && !navRerouting && Date.now() - navLastReroute > 15000){
+        navLastReroute = Date.now();
+        rerouteFromHere();
+      }
+    } else {
+      navOffCount = 0;
+    }
+
+    var step = null;
+    for(var i = 0; i < navRoute.steps.length; i++){
+      if(navRoute.steps[i].dist > loc.along + 5){ step = navRoute.steps[i]; break; }
+    }
+    if(!step || remaining < 25){
+      navArrow.textContent = '🏁';
+      setNavText('Пристигнахте', 'Целта е на ' + fmtDist(haversine(lastLatLng, navDest)));
+      if(!navSpoken.arrive){ navSpoken.arrive = true; speak('Пристигнахте'); }
+      return;
+    }
+    var toStep = step.dist - loc.along;
+    navArrow.textContent = step.arrow;
+    var mainTxt = step.kind === 'arrive' ? 'След ' + fmtDist(toStep) + ' пристигане' : fmtDist(toStep) + ' · ' + step.text;
+    setNavText(mainTxt, 'Остават ' + fmtDist(remaining) + ' · ' + routeEta(remaining) + (loc.off > 50 ? ' · ⚠️ извън маршрута' : ''));
+
+    // Voice: once at ~300 m and once just before the turn
+    var key = step.idx + ':' + step.kind;
+    if(step.kind !== 'arrive'){
+      if(toStep <= 300 && toStep > 120 && !navSpoken[key + 'far']){
+        navSpoken[key + 'far'] = true;
+        speak('След ' + speechDist(toStep) + ' ' + step.speech.charAt(0).toLowerCase() + step.speech.slice(1));
+      } else if(toStep <= 50 && !navSpoken[key + 'now']){
+        navSpoken[key + 'far'] = navSpoken[key + 'now'] = true;
+        speak(step.speech);
+        if(navigator.vibrate) navigator.vibrate(150);
+      }
+    }
+  }
+
+  // Remaining time from the router's per-road-type speeds (dirt vs asphalt), not one average
+  function routeEta(remaining){
+    var secs = navRoute.distance > 0 ? navRoute.duration * remaining / navRoute.distance : 0;
+    var mins = Math.round(secs / 60);
+    if(mins < 1) return '<1 мин';
+    if(mins < 60) return '~' + mins + ' мин';
+    var h = Math.floor(mins / 60), m = mins % 60;
+    return '~' + h + 'ч' + (m > 0 ? ' ' + m + 'м' : '');
+  }
+
+  function rerouteFromHere(){
+    if(!router || !navDest || !lastLatLng) return;
+    navRerouting = true;
+    var r = router.route(lastLatLng[0], lastLatLng[1], navDest[0], navDest[1]);
+    navRerouting = false;
+    if(r.error) return;
+    toast('Маршрутът е преизчислен.', 1800);
+    speak('Преизчисляване на маршрута');
+    activateNavRoute(r.points, r, { keepView: true });
+  }
+
+  function clearNav(){
+    navRoute = null; navSpoken = {}; navOffCount = 0;
+    navBar.classList.remove('turnMode');
+    navArrow.textContent = '↑';
+    if(window.speechSynthesis) speechSynthesis.cancel();
+    navActive = false;
+    navPicking = false;
+    navBtn.classList.remove('picking');
+    navBar.style.display = 'none';
+    if(navLine){ map.removeLayer(navLine); navLine = null; }
+    if(navDestMarker){ map.removeLayer(navDestMarker); navDestMarker = null; }
+    navDest = null;
+    if(plannedRoute && plannedRoute.id && String(plannedRoute.id).indexOf('nav_') === 0){ clearPlannedRoute(); }
+  }
+  document.getElementById('navCloseBtn').addEventListener('click', clearNav);
+
+  navBtn.addEventListener('click', function(){
+    if(navActive){ clearNav(); return; }
+    navPicking = !navPicking;
+    navBtn.classList.toggle('picking', navPicking);
+    if(navPicking){ toast('Докосни картата там, където искаш да отидеш', 3000); }
+  });
+
+  // -- Build a small routing graph from Overpass way geometries --
+  function nodeKey(latlng){ return latlng[0].toFixed(6) + ',' + latlng[1].toFixed(6); }
+
+  function buildRouteGraph(elements){
+    var nodes = {}, adj = {};
+    function ensureNode(latlng){
+      var k = nodeKey(latlng);
+      if(!nodes[k]) nodes[k] = latlng;
+      if(!adj[k]) adj[k] = [];
+      return k;
+    }
+    (elements || []).forEach(function(el){
+      if(el.type !== 'way' || !el.geometry || el.geometry.length < 2) return;
+      var tags = el.tags || {};
+      var access = (tags.access || '').toLowerCase();
+      var vehicle = (tags.motor_vehicle || tags.motorcycle || tags.atv || '').toLowerCase();
+      if(access === 'private' || access === 'no' || vehicle === 'private' || vehicle === 'no') return; // avoid, same rule as the trail overlay
+
+      var pts = el.geometry.map(function(g){ return [g.lat, g.lon]; });
+      for(var i = 1; i < pts.length; i++){
+        var kA = ensureNode(pts[i - 1]);
+        var kB = ensureNode(pts[i]);
+        var d = haversine(pts[i - 1], pts[i]);
+        adj[kA].push({to: kB, dist: d});
+        adj[kB].push({to: kA, dist: d});
+      }
+    });
+    return {nodes: nodes, adj: adj};
+  }
+
+  function nearestGraphNode(graph, latlng){
+    var bestKey = null, bestDist = Infinity;
+    for(var k in graph.nodes){
+      var d = haversine(latlng, graph.nodes[k]);
+      if(d < bestDist){ bestDist = d; bestKey = k; }
+    }
+    return bestKey ? {key: bestKey, dist: bestDist} : null;
+  }
+
+  // Simple O(V^2) Dijkstra — graphs from one Overpass bbox query are small enough for this to be fast.
+  function dijkstra(graph, startKey, endKey){
+    var dist = {}, prev = {}, visited = {};
+    for(var k in graph.nodes){ dist[k] = Infinity; }
+    dist[startKey] = 0;
+
+    while(true){
+      var u = null, best = Infinity;
+      for(var k2 in dist){
+        if(!visited[k2] && dist[k2] < best){ best = dist[k2]; u = k2; }
+      }
+      if(u === null) break;
+      if(u === endKey) break;
+      visited[u] = true;
+
+      (graph.adj[u] || []).forEach(function(edge){
+        if(visited[edge.to]) return;
+        var alt = dist[u] + edge.dist;
+        if(alt < dist[edge.to]){ dist[edge.to] = alt; prev[edge.to] = u; }
+      });
+    }
+
+    if(dist[endKey] == null || dist[endKey] === Infinity) return null;
+    var path = [endKey];
+    var cur = endKey;
+    while(cur !== startKey){
+      cur = prev[cur];
+      if(cur == null) return null;
+      path.push(cur);
+    }
+    path.reverse();
+    return path.map(function(k){ return graph.nodes[k]; });
+  }
+
+  function handleDestinationPick(latlngObj){
+    var dest = [latlngObj.lat, latlngObj.lng];
+    navPicking = false;
+    navBtn.classList.remove('picking');
+
+    if(!lastLatLng){ toast('Изчакай GPS сигнал, преди да навигираш.', 2500); return; }
+    unlockSpeech();
+
+    navDest = dest;
+    if(navDestMarker) map.removeLayer(navDestMarker);
+    navDestMarker = L.marker(dest, {icon: L.divIcon({className:'', html:'<div class="destIcon">🏁</div>', iconSize:[28,28], iconAnchor:[14,26]})}).addTo(map);
+    navBtn.classList.add('picking');
+
+    ensureRouter().then(function(r){
+      if(!r){ navigateViaOverpass(dest); return; }
+      var res = r.route(lastLatLng[0], lastLatLng[1], dest[0], dest[1]);
+      navBtn.classList.remove('picking');
+      if(res.error){
+        var why = { 'start-far': 'Няма път в близост до теб', 'end-far': 'Няма път в близост до целта',
+                    'disconnected': 'Целта не е свързана с пътищата около теб', 'no-route': 'Не намерих маршрут' }[res.error] || 'Не намерих маршрут';
+        toast(why + ' — показвам права линия.', 3500);
+        activateNavRoute([lastLatLng, dest]);
+        return;
+      }
+      var parts = [];
+      if(res.km.track >= 0.1) parts.push(res.km.track.toFixed(1).replace('.', ',') + ' км черни');
+      if(res.km.paved >= 0.1) parts.push(res.km.paved.toFixed(1).replace('.', ',') + ' км асфалт');
+      if(res.km.path >= 0.1) parts.push(res.km.path.toFixed(1).replace('.', ',') + ' км пътеки');
+      toast('Маршрут ' + fmtDist(res.distance) + ' (' + parts.join(', ') + ')', 4000);
+      activateNavRoute(res.points, res);
+    });
+  }
+
+  // Online fallback when the offline routing data isn't available
+  function navigateViaOverpass(dest){
+    var straight = haversine(lastLatLng, dest);
+    if(straight > NAV_MAX_STRAIGHT_KM * 1000){
+      navBtn.classList.remove('picking');
+      toast('Целта е твърде далеч (>' + NAV_MAX_STRAIGHT_KM + ' км) за навигация по трасета.', 3500);
+      return;
+    }
+
+    toast('Изчисляване на маршрут по картографираните пътища (онлайн)...', 3000);
+
+    var b = L.latLngBounds([lastLatLng, dest]).pad(0.25);
+    var bbox = b.getSouth() + ',' + b.getWest() + ',' + b.getNorth() + ',' + b.getEast();
+    var query = '[out:json][timeout:25];(' +
+      'way["highway"~"^(track|path|bridleway|unclassified|service|residential|tertiary|secondary|primary)$"]' +
+      '["access"!~"private|no"](' + bbox + ');' +
+      ');out body geom;';
+
+    overpassFetch(query)
+      .then(function(data){
+        navBtn.classList.remove('picking');
+        var graph = buildRouteGraph(data.elements);
+        var startSnap = nearestGraphNode(graph, lastLatLng);
+        var endSnap = nearestGraphNode(graph, dest);
+
+        var routePoints = null;
+        if(startSnap && endSnap && startSnap.dist <= NAV_SNAP_MAX_M && endSnap.dist <= NAV_SNAP_MAX_M){
+          routePoints = dijkstra(graph, startSnap.key, endSnap.key);
+        }
+
+        if(!routePoints){
+          toast('Не намерих свързан път в картата — показвам права линия до целта.', 3500);
+          routePoints = [lastLatLng, dest];
+        } else {
+          toast('Маршрутът е готов.', 2000);
+        }
+
+        activateNavRoute(routePoints);
+      })
+      .catch(function(err){
+        navBtn.classList.remove('picking');
+        toast('Грешка при търсене на маршрут (' + err.message + ') — права линия до целта.', 3500);
+        activateNavRoute([lastLatLng, dest]);
+      });
+  }
+
+  function activateNavRoute(points, info, opts){
+    opts = opts || {};
+    if(navLine) map.removeLayer(navLine);
+    navRoute = info || null;
+    navHintIdx = 0; navSpoken = {}; navOffCount = 0;
+    navBar.classList.toggle('turnMode', !!navRoute);
+    if(!navRoute){ navArrow.textContent = '↑'; }
+    navLine = navRoute
+      ? L.polyline(points, {color:'#7c4dff', weight:6, opacity:0.85}).addTo(map)
+      : L.polyline(points, {color:'#b388ff', weight:5, opacity:0.9, dashArray:'1,10'}).addTo(map);
+    navActive = true;
+    navBar.style.display = 'flex';
+    updateNavStats();
+    if(!opts.keepView) map.fitBounds(navLine.getBounds(), {padding:[60,60]});
+    if(navRoute && !opts.keepView && navRoute.steps.length) speak('Маршрутът е готов. ' + speechDist(navRoute.distance) + '.');
+
+    // Also register it as the (invisible) planned route, so the off-route alarm can be
+    // switched on for it too without drawing a second, duplicate line on the map.
+    setPlannedRoute({
+      id: 'nav_' + Date.now(),
+      name: 'Навигация до цел',
+      points: points,
+      distance: trackDistance(points)
+    }, {silent: true, skipLine: true});
+  }
+
+  // ---------- Search (Nominatim, free) ----------
+  var searchInput = document.getElementById('searchInput');
+  var searchResults = document.getElementById('searchResults');
+  var searchDebounce;
+
+  searchInput.addEventListener('input', function(){
+    clearTimeout(searchDebounce);
+    var q = searchInput.value.trim();
+    if(q.length < 3){ searchResults.style.display='none'; return; }
+    searchDebounce = setTimeout(function(){
+      fetch('https://nominatim.openstreetmap.org/search?format=json&limit=6&accept-language=bg&q=' + encodeURIComponent(q))
+        .then(function(r){ return r.json(); })
+        .then(function(list){
+          searchResults.innerHTML = '';
+          if(!list.length){ searchResults.style.display='none'; return; }
+          list.forEach(function(item){
+            var div = document.createElement('div');
+            div.className = 'searchResult';
+            div.textContent = item.display_name;
+            div.addEventListener('click', function(){
+              map.setView([parseFloat(item.lat), parseFloat(item.lon)], 14);
+              searchResults.style.display='none';
+              searchInput.value = item.display_name.split(',')[0];
+            });
+            searchResults.appendChild(div);
+          });
+          searchResults.style.display = 'block';
+        }).catch(function(){ searchResults.style.display='none'; });
+    }, 400);
+  });
+
+}
+</script>
+</body>
+</html>
